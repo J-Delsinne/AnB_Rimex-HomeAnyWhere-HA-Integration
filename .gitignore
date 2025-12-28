@@ -31,7 +31,7 @@ stdout.txt
 stderr.txt
 outputmapping.txt
 nul
-ha_reverse
+ha_reverse/
 
 
 # Build artifacts
