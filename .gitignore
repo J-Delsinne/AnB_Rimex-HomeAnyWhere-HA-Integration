@@ -1,0 +1,46 @@
+# Python
+__pycache__/
+*.py[cod]
+*$py.class
+*.so
+.Python
+
+# Virtual environments
+.venv/
+venv/
+ENV/
+env/
+
+# IDE
+.vscode/
+.idea/
+*.swp
+*.swo
+*~
+.claude/
+
+# OS
+.DS_Store
+Thumbs.db
+
+# Project-specific
+*.log
+*.pcap.bak
+cli_json_output_sample.json
+stdout.txt
+stderr.txt
+outputmapping.txt
+nul
+
+# Build artifacts
+build/
+dist/
+*.egg-info/
+
+# Temporary files
+*.tmp
+*.temp
+*~
+
+# Home Assistant custom component - don't ignore
+!custom_components/

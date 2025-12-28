@@ -1,0 +1,28 @@
+{
+  "config": {
+    "step": {
+      "user": {
+        "title": "Set up IPCom Home Anywhere Blue",
+        "description": "Configure the IPCom integration by providing the CLI script path and connection details.",
+        "data": {
+          "cli_path": "Path to ipcom_cli.py (absolute or relative to config directory)",
+          "host": "IPCom host address",
+          "port": "IPCom port",
+          "scan_interval": "Update interval (seconds)"
+        }
+      }
+    },
+    "error": {
+      "cli_not_found": "CLI script not found at the specified path. Please check the path and try again.",
+      "cli_not_readable": "CLI script exists but is not readable. Please check file permissions.",
+      "connection_timeout": "Connection to IPCom timed out. Please check the host and port.",
+      "cli_failed": "CLI command failed. Check that the CLI script works and IPCom is accessible.",
+      "invalid_json": "CLI returned invalid JSON. This may indicate a CLI version mismatch.",
+      "unknown": "An unexpected error occurred. Check the logs for details."
+    },
+    "abort": {
+      "already_configured": "This IPCom host is already configured.",
+      "cli_not_found": "CLI script not found during import. Please set up manually via the UI."
+    }
+  }
+}

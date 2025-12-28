@@ -1,0 +1,201 @@
+# Home Anywhere Blue - AUTHORITATIVE Device Mapping
+# =====================================================
+# This is the FINAL, GROUND TRUTH mapping of module/output addresses to device names.
+# This mapping is used by:
+#   - CLI commands (ipcom_cli.py)
+#   - Future Home Assistant integration (unchanged)
+#
+# ⚠️ IMPORTANT:
+#   - Device names are EXACT and must be preserved (spacing, capitalization)
+#   - CLI accepts case-insensitive input but displays canonical names
+#   - One-to-one mapping (no duplicates allowed)
+#   - Validated at startup for conflicts
+#
+# Format:
+#   category:
+#     device_name:
+#       module: 1-16        # EXO module number
+#       output: 1-8         # Output channel on module
+#       type: dimmer|switch # Device capability
+#       description: "..."  # Optional human description
+#
+# Last Updated: 2025-12-28
+# Status: Production - DO NOT MODIFY without approval
+
+# =====================================================
+# LIGHTS - Module 3, 4, 6
+# =====================================================
+lights:
+  wasbak:
+    module: 3
+    output: 1
+    type: switch
+    display_name: "WASBAK"
+    description: "Sink light"
+
+  badkamer:
+    module: 3
+    output: 2
+    type: switch
+    display_name: "BADKAMER"
+    description: "Bathroom light"
+
+  douche:
+    module: 3
+    output: 3
+    type: switch
+    display_name: "DOUCHE"
+    description: "Shower light"
+
+  keuken:
+    module: 3
+    output: 4
+    type: switch
+    display_name: "KEUKEN"
+    description: "Kitchen light"
+
+  kelder:
+    module: 3
+    output: 5
+    type: switch
+    display_name: "KELDER"
+    description: "Basement light"
+
+  buiten:
+    module: 3
+    output: 6
+    type: switch
+    display_name: "BUITEN"
+    description: "Outside light"
+
+  slaapkamer_2:
+    module: 3
+    output: 7
+    type: switch
+    display_name: "SLAAPKAMER 2"
+    description: "Bedroom 2 light"
+
+  trap:
+    module: 4
+    output: 1
+    type: switch
+    display_name: "TRAP"
+    description: "Stairs light"
+
+  verdiep:
+    module: 4
+    output: 2
+    type: switch
+    display_name: "VERDIEP"
+    description: "Floor light"
+
+  slaapkamer_1:
+    module: 4
+    output: 3
+    type: switch
+    display_name: "SLAAPKAMER 1"
+    description: "Bedroom 1 light"
+
+  eetkamer:
+    module: 6
+    output: 1
+    type: dimmer
+    display_name: "EETKAMER"
+    description: "Dining room light"
+
+  salon:
+    module: 6
+    output: 2
+    type: dimmer
+    display_name: "SALON"
+    description: "Living room light"
+
+
+# =====================================================
+# SHUTTERS (ROLLUIKEN) - Module 5
+# =====================================================
+# Dual-Relay Control System:
+#   Each physical shutter requires TWO relays (UP and DOWN)
+#   Safety: UP=1 & DOWN=1 must NEVER occur
+#   STOP is achieved by setting both relays to 0
+#
+# Relay Naming Convention:
+#   *_d = DOWN relay (closes shutter)
+#   *_m = UP/Motor relay (opens shutter)
+#
+# Example for "Living room left":
+#   UP relay:   rolluik_sal_links_m (output 2)
+#   DOWN relay: rolluik_sal_links_d (output 1)
+# =====================================================
+shutters:
+  rolluik_sal_links_d:
+    module: 5
+    output: 1
+    type: switch
+    display_name: "ROLLUIK SAL LINKS D"
+    description: "Living room left shutter - Down relay"
+    relay_role: down
+    paired_device: rolluik_sal_links_m
+
+  rolluik_sal_links_m:
+    module: 5
+    output: 2
+    type: switch
+    display_name: "ROLLUIK SAL LINKS M"
+    description: "Living room left shutter - UP relay"
+    relay_role: up
+    paired_device: rolluik_sal_links_d
+
+  rolluik_sal_rechts_d:
+    module: 5
+    output: 3
+    type: switch
+    display_name: "ROLLUIK SAL RECHTS D"
+    description: "Living room right shutter - Down relay"
+    relay_role: down
+    paired_device: rolluik_sal_rechts_m
+
+  rolluik_sal_rechts_m:
+    module: 5
+    output: 4
+    type: switch
+    display_name: "ROLLUIK SAL RECHTS M"
+    description: "Living room right shutter - UP relay"
+    relay_role: up
+    paired_device: rolluik_sal_rechts_d
+
+  rolluik_eetkamer_d:
+    module: 5
+    output: 5
+    type: switch
+    display_name: "ROLLUIK EETKAMER D"
+    description: "Dining room shutter - Down relay"
+    relay_role: down
+    paired_device: rolluik_eetkamer_m
+
+  rolluik_eetkamer_m:
+    module: 5
+    output: 6
+    type: switch
+    display_name: "ROLLUIK EETKAMER M"
+    description: "Dining room shutter - UP relay"
+    relay_role: up
+    paired_device: rolluik_eetkamer_d
+
+  rolluik_keuken_d:
+    module: 5
+    output: 7
+    type: switch
+    display_name: "ROLLUIK KEUKEN D"
+    description: "Kitchen shutter - Down relay"
+    relay_role: down
+    paired_device: rolluik_keuken_m
+
+  rolluik_keuken_m:
+    module: 5
+    output: 8
+    type: switch
+    display_name: "ROLLUIK KEUKEN M"
+    description: "Kitchen shutter - UP relay"
+    relay_role: up
+    paired_device: rolluik_keuken_d
