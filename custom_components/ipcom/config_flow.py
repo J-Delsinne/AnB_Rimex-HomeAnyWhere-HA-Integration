@@ -259,7 +259,7 @@ class IPComConfigFlow(config_entries.ConfigFlow, domain=DOMAIN):
             {
                 vol.Required(
                     CONF_CLI_PATH,
-                    description={"suggested_value": "ipcom_cli.py"},
+                    description={"suggested_value": "ipcom/ipcom_cli.py"},
                 ): cv.string,
                 vol.Required(
                     CONF_HOST,
