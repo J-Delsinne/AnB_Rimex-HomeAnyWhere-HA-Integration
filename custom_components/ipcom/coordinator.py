@@ -120,7 +120,7 @@ class IPComCoordinator(DataUpdateCoordinator):
 
                     # Trigger coordinator update without fetching (data is already fresh)
                     # We need to update data AND notify listeners
-                    def update_and_notify():
+                    async def update_and_notify():
                         """Update data and notify all listening entities."""
                         _LOGGER.critical("📡 Setting coordinator data")
                         # Set the data on the coordinator
@@ -131,7 +131,8 @@ class IPComCoordinator(DataUpdateCoordinator):
                         self.async_update_listeners()
                         _LOGGER.critical("📡 Listeners notified")
 
-                    self.hass.loop.call_soon_threadsafe(update_and_notify)
+                    # Schedule the coroutine in the event loop
+                    asyncio.run_coroutine_threadsafe(update_and_notify(), self.hass.loop)
                     _LOGGER.critical("📡 Update scheduled")
 
                 except Exception as e:

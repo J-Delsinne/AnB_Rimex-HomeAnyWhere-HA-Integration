@@ -144,11 +144,21 @@ class IPComLight(CoordinatorEntity, LightEntity):
         # Use state field from CLI JSON contract
         state = device_data.get("state", "off")
         result = state == "on"
+
+        # Count how many times this is called
+        if not hasattr(self, "_is_on_call_count"):
+            self._is_on_call_count = 0
+        self._is_on_call_count += 1
+
         # Log first time or when state changes
         if not hasattr(self, "_last_state") or self._last_state != result:
             self._last_state = result
-            _LOGGER.critical("💡 Light %s: is_on=%s (state='%s', value=%s)",
-                           self._device_key, result, state, device_data.get("value"))
+            _LOGGER.critical("💡 Light %s: is_on=%s (state='%s', value=%s) [call #%d]",
+                           self._device_key, result, state, device_data.get("value"), self._is_on_call_count)
+        elif self._is_on_call_count % 10 == 0:
+            # Log every 10th call even if state hasn't changed
+            _LOGGER.critical("💡 Light %s: is_on=%s (unchanged) [call #%d]",
+                           self._device_key, result, self._is_on_call_count)
         return result
 
     async def async_turn_on(self, **kwargs: Any) -> None:
