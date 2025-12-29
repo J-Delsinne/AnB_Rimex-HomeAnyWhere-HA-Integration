@@ -106,11 +106,11 @@ class IPComCoordinator(DataUpdateCoordinator):
             def on_snapshot(snapshot):
                 """Handle state snapshot updates from background loop."""
                 try:
-                    _LOGGER.debug(f"Received snapshot callback (timestamp: {snapshot.timestamp})")
+                    _LOGGER.critical(f"📡 Snapshot callback fired! [FIX v2]")
 
                     # Convert snapshot to device data
                     devices_data = self._snapshot_to_devices(snapshot)
-                    _LOGGER.debug(f"Converted snapshot to {len(devices_data)} devices")
+                    _LOGGER.critical(f"✅ Converted snapshot to {len(devices_data)} devices")
 
                     # Store latest data
                     self._latest_data = {
@@ -198,8 +198,9 @@ class IPComCoordinator(DataUpdateCoordinator):
         for device_key, device_info in self._device_mapper.devices.items():
             module = device_info["module"]
             output = device_info["output"]
-            category = device_info["category"]
-            device_type = device_info["type"]
+            # Category is stored separately in device_categories dict
+            category = self._device_mapper.device_categories.get(device_key, "unknown")
+            device_type = device_info.get("type", "switch")
 
             # Get value from snapshot
             value = snapshot.get_value(module, output)
@@ -212,7 +213,7 @@ class IPComCoordinator(DataUpdateCoordinator):
             # Build device data
             device_data = {
                 "device_key": device_key,
-                "display_name": device_info["display_name"],
+                "display_name": device_info.get("display_name", device_key.replace("_", " ").title()),
                 "category": category,
                 "type": device_type,
                 "module": module,
