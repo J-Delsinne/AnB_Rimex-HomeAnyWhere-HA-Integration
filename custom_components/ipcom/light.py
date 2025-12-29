@@ -101,12 +101,21 @@ class IPComLight(CoordinatorEntity, LightEntity):
     @property
     def available(self) -> bool:
         """Return True if entity is available."""
-        return (
+        result = (
             self.coordinator.last_update_success
             and self.coordinator.data is not None
             and "devices" in self.coordinator.data
             and self._entity_key in self.coordinator.data["devices"]
         )
+        # Only log once on startup or when state changes
+        if not hasattr(self, "_last_available") or self._last_available != result:
+            self._last_available = result
+            _LOGGER.critical("💡 Light %s AVAILABLE=%s (last_update_success=%s, has_data=%s, entity_key='%s')",
+                          self._device_key, result,
+                          self.coordinator.last_update_success,
+                          self.coordinator.data is not None,
+                          self._entity_key)
+        return result
 
     @property
     def device_info(self) -> dict[str, Any]:
