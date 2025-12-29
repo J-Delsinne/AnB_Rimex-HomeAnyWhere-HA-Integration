@@ -135,7 +135,7 @@ async def async_setup_entry(
 
     if entities:
         _LOGGER.info("Adding %d dual-relay cover entities", len(entities))
-        async_add_entities(entities)
+        async_add_entities(entities, update_before_add=True)
     else:
         _LOGGER.warning("No cover entities found in coordinator data")
 

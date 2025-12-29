@@ -59,7 +59,7 @@ async def async_setup_entry(
 
     if entities:
         _LOGGER.critical("🎉 Adding %d light entities to Home Assistant", len(entities))
-        async_add_entities(entities)
+        async_add_entities(entities, update_before_add=True)
     else:
         _LOGGER.critical("❌ No light entities found in coordinator data")
 
