@@ -5,18 +5,23 @@ Home Anywhere Blue - IPCom CLI
 Human-friendly command-line interface for IPCom device control.
 
 Commands:
-  status              - Show full system state
-  on <name>           - Turn device ON
-  off <name>          - Turn device OFF
-  toggle <name>       - Toggle device state
-  dim <name> <0-100>  - Set dimmer level (percentage)
-  watch               - Live monitoring with device names
+  status                  - Show full system state
+  on <name>               - Turn device ON
+  off <name>              - Turn device OFF
+  toggle <name>           - Toggle device state
+  dim <name> <0-100>      - Set dimmer level (percentage)
+  watch                   - Live monitoring with device names
+  cover_open <name>       - Open shutter/cover (safe dual-relay)
+  cover_close <name>      - Close shutter/cover (safe dual-relay)
+  cover_stop <name>       - Stop shutter/cover movement
 
 Examples:
   python ipcom_cli.py status
   python ipcom_cli.py on keuken
   python ipcom_cli.py dim salon 40
   python ipcom_cli.py watch
+  python ipcom_cli.py cover_open rolluik_sal_links_m
+  python ipcom_cli.py cover_stop rolluik_sal_links_m
 """
 
 import sys
@@ -337,6 +342,141 @@ def control_device(client: "IPComClient", mapper: DeviceMapper, name: str, actio
         return False
 
 
+def control_cover(client: "IPComClient", mapper: DeviceMapper, name: str, action: str):
+    """Control a shutter/cover using dual-relay logic.
+
+    Args:
+        client: IPComClient instance
+        mapper: DeviceMapper instance
+        name: Device key (can be either UP or DOWN relay)
+        action: 'open', 'close', or 'stop'
+
+    Returns:
+        bool: True if successful, False otherwise
+
+    Safety Rules:
+        - NEVER allow UP=1 AND DOWN=1 simultaneously
+        - Always turn OFF the opposite relay before turning ON the target relay
+        - STOP means both relays OFF (UP=0, DOWN=0)
+    """
+    # Resolve device (accept either UP or DOWN relay name)
+    device = mapper.get_device(name)
+
+    if not device:
+        print(f"❌ Device '{name}' not found in devices.yaml")
+        print(f"\nAvailable shutter devices:")
+        for dev_name, dev_config in mapper.list_devices().items():
+            category = mapper.get_category(dev_name)
+            if category == "shutters":
+                display = dev_config.get('display_name', dev_name.upper())
+                relay_role = dev_config.get('relay_role', 'unknown')
+                print(f"  - {dev_name} ({display}) [{relay_role}]")
+        return False
+
+    # Verify this is a shutter
+    category = mapper.get_category(name)
+    if category != "shutters":
+        print(f"❌ Device '{name}' is not a shutter (category: {category})")
+        print(f"Use 'on'/'off' commands for non-shutter devices")
+        return False
+
+    # Get relay metadata
+    relay_role = device.get('relay_role')
+    paired_device_key = device.get('paired_device')
+
+    if not relay_role or not paired_device_key:
+        print(f"❌ Shutter '{name}' is missing relay_role or paired_device metadata")
+        return False
+
+    # Resolve paired relay
+    paired_device = mapper.get_device(paired_device_key)
+    if not paired_device:
+        print(f"❌ Paired device '{paired_device_key}' not found")
+        return False
+
+    # Determine which is UP and which is DOWN
+    if relay_role == "up":
+        up_relay_name = name
+        up_relay = device
+        down_relay_name = paired_device_key
+        down_relay = paired_device
+    elif relay_role == "down":
+        down_relay_name = name
+        down_relay = device
+        up_relay_name = paired_device_key
+        up_relay = paired_device
+    else:
+        print(f"❌ Invalid relay_role: {relay_role} (must be 'up' or 'down')")
+        return False
+
+    up_module = up_relay['module']
+    up_output = up_relay['output']
+    down_module = down_relay['module']
+    down_output = down_relay['output']
+
+    # Get logical shutter name (remove _m or _d suffix)
+    shutter_name = name.replace('_m', '').replace('_d', '')
+    display_name = device.get('display_name', shutter_name.upper()).replace(' M', '').replace(' D', '')
+
+    # Safety check: verify current state
+    snapshot = client.get_latest_snapshot()
+    if snapshot:
+        up_value = snapshot.get_value(up_module, up_output)
+        down_value = snapshot.get_value(down_module, down_output)
+
+        if up_value > 0 and down_value > 0:
+            print(f"⚠️ WARNING: Invalid state detected! UP=1 AND DOWN=1")
+            print(f"   UP relay:   Module {up_module}, Output {up_output} = {up_value}")
+            print(f"   DOWN relay: Module {down_module}, Output {down_output} = {down_value}")
+            print(f"   This should NEVER happen. Forcing STOP for safety.")
+            action = 'stop'
+
+    # Execute action with safety logic
+    try:
+        if action == 'open':
+            # OPEN: Ensure DOWN=0, then set UP=1
+            print(f"Opening {display_name}...")
+            print(f"  Step 1: Ensuring DOWN relay OFF (Module {down_module}, Output {down_output})")
+            client.turn_off(down_module, down_output)
+
+            print(f"  Step 2: Setting UP relay ON (Module {up_module}, Output {up_output})")
+            client.turn_on(up_module, up_output)
+
+            print(f"✔ {display_name} opening (UP=1, DOWN=0)")
+
+        elif action == 'close':
+            # CLOSE: Ensure UP=0, then set DOWN=1
+            print(f"Closing {display_name}...")
+            print(f"  Step 1: Ensuring UP relay OFF (Module {up_module}, Output {up_output})")
+            client.turn_off(up_module, up_output)
+
+            print(f"  Step 2: Setting DOWN relay ON (Module {down_module}, Output {down_output})")
+            client.turn_on(down_module, down_output)
+
+            print(f"✔ {display_name} closing (UP=0, DOWN=1)")
+
+        elif action == 'stop':
+            # STOP: Set both relays OFF
+            print(f"Stopping {display_name}...")
+            print(f"  Setting UP relay OFF (Module {up_module}, Output {up_output})")
+            client.turn_off(up_module, up_output)
+
+            print(f"  Setting DOWN relay OFF (Module {down_module}, Output {down_output})")
+            client.turn_off(down_module, down_output)
+
+            print(f"✔ {display_name} stopped (UP=0, DOWN=0)")
+
+        else:
+            print(f"❌ Invalid cover action: {action} (must be 'open', 'close', or 'stop')")
+            return False
+
+        return True
+
+    except Exception as e:
+        print(f"❌ Error controlling cover {display_name}: {e}")
+        return False
+
+
 def watch_mode(client: "IPComClient", mapper: DeviceMapper):
     """Live monitoring with device names."""
     print("\n" + "=" * 60)
@@ -581,12 +721,14 @@ Examples:
   %(prog)s toggle eetkamer           Toggle dining room light
   %(prog)s dim salon 40              Dim living room to 40%%
   %(prog)s watch                     Live monitoring mode
+  %(prog)s cover_open rolluik_sal_links_m    Open living room left shutter
+  %(prog)s cover_stop rolluik_sal_links_m    Stop shutter movement
 
 Device names are defined in devices.yaml
         """
     )
 
-    parser.add_argument('command', choices=['status', 'on', 'off', 'toggle', 'dim', 'watch'],
+    parser.add_argument('command', choices=['status', 'on', 'off', 'toggle', 'dim', 'watch', 'cover_open', 'cover_close', 'cover_stop'],
                         help='Command to execute')
     parser.add_argument('device', nargs='?', help='Device name (from devices.yaml)')
     parser.add_argument('value', nargs='?', type=int, help='Dimmer value (0-100) for dim command')
@@ -693,6 +835,21 @@ Device names are defined in devices.yaml
 
         elif args.command == 'dim':
             success = control_device(client, mapper, args.device, args.command, args.value)
+            if not success:
+                return 1
+
+        elif args.command == 'cover_open':
+            success = control_cover(client, mapper, args.device, 'open')
+            if not success:
+                return 1
+
+        elif args.command == 'cover_close':
+            success = control_cover(client, mapper, args.device, 'close')
+            if not success:
+                return 1
+
+        elif args.command == 'cover_stop':
+            success = control_cover(client, mapper, args.device, 'stop')
             if not success:
                 return 1
 

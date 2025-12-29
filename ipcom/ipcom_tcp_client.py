@@ -13,6 +13,8 @@ Date: 2025-12-27
 import socket
 import time
 import logging
+import threading
+import queue
 from typing import Optional, Callable, Iterator
 from dataclasses import dataclass
 
@@ -243,6 +245,11 @@ class IPComClient:
     RECONNECT_MAX_DELAY = 30.0  # seconds
     RECONNECT_MULTIPLIER = 2.0
 
+    # Background loop intervals (from official app reverse engineering)
+    KEEPALIVE_INTERVAL = 30.0  # seconds - prevents TCP timeout
+    STATUS_POLL_INTERVAL = 0.350  # seconds (350ms) - continuous state updates
+    COMMAND_QUEUE_INTERVAL = 0.250  # seconds (250ms) - process queued commands
+
     def __init__(self, host: str, port: int = DEFAULT_PORT, debug: bool = False):
         """
         Initialize IPCom client.
@@ -272,6 +279,11 @@ class IPComClient:
         self._polling_enabled = False
         self._processing = False
 
+        # Shadow state: tracks pending writes that haven't been confirmed by server yet
+        # This prevents race conditions when rapid commands overwrite each other
+        # Format: {module_number: [val1, val2, ..., val8]}
+        self._pending_writes: dict[int, list[int]] = {}
+
         # Encryption and authentication (from AUTH_HANDSHAKE_SPEC.md)
         self._encryption = IPComEncryption()
         self._authenticated = False
@@ -284,6 +296,16 @@ class IPComClient:
         self._on_frame: Optional[Callable[[Frame], None]] = None
         self._on_connect: Optional[Callable[[], None]] = None
         self._on_disconnect: Optional[Callable[[], None]] = None
+
+        # Background threads and command queue (persistent connection mode)
+        self._persistent_mode = False
+        self._keepalive_thread: Optional[threading.Thread] = None
+        self._status_poll_thread: Optional[threading.Thread] = None
+        self._command_queue_thread: Optional[threading.Thread] = None
+        self._receive_thread: Optional[threading.Thread] = None
+        self._command_queue: queue.Queue = queue.Queue()
+        self._shutdown_event = threading.Event()
+        self._lock = threading.RLock()  # For thread-safe operations
 
     def connect(self) -> bool:
         """
@@ -707,6 +729,9 @@ class IPComClient:
                     # Store latest snapshot
                     self._latest_snapshot = snapshot
 
+                    # Clear shadow state - server has confirmed the state
+                    self._pending_writes.clear()
+
                     # Trigger callback
                     if self._on_state_snapshot:
                         self._on_state_snapshot(snapshot)
@@ -874,6 +899,9 @@ class IPComClient:
 
             # Store latest
             self._latest_snapshot = snapshot
+
+            # Clear shadow state - server has confirmed the state
+            self._pending_writes.clear()
 
             if self.debug:
                 self.logger.debug(f"State snapshot received: {snapshot}")
@@ -1090,11 +1118,20 @@ class IPComClient:
         if not self._latest_snapshot:
             raise RuntimeError("No state snapshot available yet (need current values)")
 
-        # Get current module values from snapshot
-        values = self._latest_snapshot.get_module_values(module)
+        # Get current module values from shadow state (pending writes) or snapshot
+        # This prevents race condition where rapid commands overwrite each other
+        if module in self._pending_writes:
+            # Use shadow state (includes pending writes not yet confirmed)
+            values = self._pending_writes[module].copy()
+        else:
+            # No pending writes, use snapshot
+            values = self._latest_snapshot.get_module_values(module)
 
         # Update target output while preserving others
         values[output - 1] = value
+
+        # Store in shadow state so next command sees this pending write
+        self._pending_writes[module] = values
 
         # Use frame_builder to construct the proper command
         from frame_builder import build_exo_set_values_frame, build_frame_request_command
@@ -1203,6 +1240,328 @@ class IPComClient:
         self._polling_enabled = False
         self.logger.info("Stopped snapshot polling")
 
+    # ==================================================================================
+    # PERSISTENT CONNECTION MODE - Background Loops (Official App Behavior)
+    # ==================================================================================
+
+    def start_persistent_connection(self, auto_reconnect: bool = True) -> bool:
+        """
+        Start persistent connection mode with background loops (matches official app).
+
+        This replaces the inefficient connect-poll-disconnect pattern with:
+        1. Keep-Alive Loop (30s interval) - Prevents TCP timeout
+        2. Status Poll Loop (350ms interval) - Continuous state updates (~2.86/sec)
+        3. Command Queue Loop (250ms interval) - Processes queued commands
+        4. Receive Loop (continuous) - Handles incoming data
+
+        Based on reverse engineering findings from HomeAnywhere Blue app.
+
+        Args:
+            auto_reconnect: Automatically reconnect on disconnection
+
+        Returns:
+            True if connection established and loops started, False otherwise
+        """
+        if self._persistent_mode:
+            self.logger.warning("Already in persistent connection mode")
+            return True
+
+        # Connect and authenticate
+        if not self._connected:
+            if not self.connect():
+                return False
+
+        if not self._authenticated:
+            if not self.authenticate():
+                self.disconnect()
+                return False
+
+        # Enable persistent mode
+        self._persistent_mode = True
+        self._shutdown_event.clear()
+
+        # Start background loops
+        self.logger.info("Starting persistent connection mode (official app behavior)")
+
+        # 1. Keep-Alive Loop (30s interval)
+        self._keepalive_thread = threading.Thread(
+            target=self._keepalive_loop,
+            name="IPCom-KeepAlive",
+            daemon=True
+        )
+        self._keepalive_thread.start()
+
+        # 2. Status Poll Loop (350ms interval)
+        self._status_poll_thread = threading.Thread(
+            target=self._status_poll_loop,
+            name="IPCom-StatusPoll",
+            daemon=True
+        )
+        self._status_poll_thread.start()
+
+        # 3. Command Queue Loop (250ms interval)
+        self._command_queue_thread = threading.Thread(
+            target=self._command_queue_loop,
+            name="IPCom-CommandQueue",
+            daemon=True
+        )
+        self._command_queue_thread.start()
+
+        # 4. Receive Loop (continuous)
+        self._receive_thread = threading.Thread(
+            target=self._persistent_receive_loop,
+            args=(auto_reconnect,),
+            name="IPCom-Receive",
+            daemon=True
+        )
+        self._receive_thread.start()
+
+        self.logger.info(
+            "Persistent connection established: "
+            f"keep-alive={self.KEEPALIVE_INTERVAL}s, "
+            f"polling={self.STATUS_POLL_INTERVAL}s, "
+            f"cmd_queue={self.COMMAND_QUEUE_INTERVAL}s"
+        )
+
+        return True
+
+    def stop_persistent_connection(self):
+        """
+        Stop persistent connection mode and all background loops.
+        """
+        if not self._persistent_mode:
+            return
+
+        self.logger.info("Stopping persistent connection mode...")
+        self._persistent_mode = False
+        self._shutdown_event.set()
+
+        # Give threads a moment to see the shutdown signal
+        time.sleep(0.1)
+
+        # Wait for threads to finish (with timeout)
+        for thread in [
+            self._keepalive_thread,
+            self._status_poll_thread,
+            self._command_queue_thread,
+            self._receive_thread
+        ]:
+            if thread and thread.is_alive():
+                thread.join(timeout=2.0)
+
+        # Disconnect (threads should have stopped by now)
+        self.disconnect()
+
+        self.logger.info("Persistent connection stopped")
+
+    def _keepalive_loop(self):
+        """
+        Background loop: Send keep-alive every 30 seconds.
+
+        Purpose:
+        - Prevents TCP connection timeout
+        - Detects disconnections early
+        - Matches official app behavior (KeepAliveRequestCommand every 30s)
+
+        From IPCommunication.cs: KeepAlive timer runs while connected.
+        """
+        self.logger.debug("Keep-Alive loop started (interval=30s)")
+
+        while self._persistent_mode and not self._shutdown_event.is_set():
+            try:
+                if self._connected and self._authenticated:
+                    # Don't send if command is processing
+                    if not self._processing:
+                        with self._lock:
+                            try:
+                                self.send_keepalive()
+                                self.logger.debug("Keep-alive sent")
+                            except Exception as e:
+                                self.logger.error(f"Keep-alive failed: {e}")
+                                # Connection might be dead, receive loop will handle reconnect
+
+                # Wait for next interval
+                self._shutdown_event.wait(timeout=self.KEEPALIVE_INTERVAL)
+
+            except Exception as e:
+                self.logger.error(f"Error in keep-alive loop: {e}")
+                if not self._persistent_mode:
+                    break
+                time.sleep(1.0)
+
+        self.logger.debug("Keep-Alive loop stopped")
+
+    def _status_poll_loop(self):
+        """
+        Background loop: Poll status every 350ms.
+
+        Purpose:
+        - Continuous state updates (~2.86 updates per second)
+        - Triggers on_state_snapshot callbacks for real-time UI updates
+        - Matches official app behavior (GetExoOutputs() every 350ms)
+
+        From IPCommunication.cs:554-599: GetExoOutputs() runs on timer with 350ms delay.
+        """
+        self.logger.debug("Status Poll loop started (interval=350ms)")
+
+        while self._persistent_mode and not self._shutdown_event.is_set():
+            try:
+                if self._connected and self._authenticated:
+                    # Don't send if command is processing
+                    if not self._processing:
+                        with self._lock:
+                            try:
+                                self.request_snapshot()
+                            except Exception as e:
+                                self.logger.error(f"Status poll failed: {e}")
+                                # Connection might be dead, receive loop will handle reconnect
+
+                # Wait for next interval
+                self._shutdown_event.wait(timeout=self.STATUS_POLL_INTERVAL)
+
+            except Exception as e:
+                self.logger.error(f"Error in status poll loop: {e}")
+                if not self._persistent_mode:
+                    break
+                time.sleep(0.5)
+
+        self.logger.debug("Status Poll loop stopped")
+
+    def _command_queue_loop(self):
+        """
+        Background loop: Process command queue every 250ms.
+
+        Purpose:
+        - Handles user commands without blocking status polling
+        - Sets _processing flag to pause polling during command execution
+        - Waits for command response before resuming polling
+        - Matches official app behavior (command processing with polling pause)
+
+        From official app: Commands set processing=true, pause polling, execute, resume.
+        """
+        self.logger.debug("Command Queue loop started (interval=250ms)")
+
+        while self._persistent_mode and not self._shutdown_event.is_set():
+            try:
+                # Check for queued commands (non-blocking with timeout)
+                try:
+                    command = self._command_queue.get(timeout=self.COMMAND_QUEUE_INTERVAL)
+                except queue.Empty:
+                    continue
+
+                # Process command
+                if self._connected and self._authenticated:
+                    # Set processing flag to pause polling
+                    self._processing = True
+
+                    try:
+                        # Execute command
+                        command_func = command["func"]
+                        command_args = command.get("args", ())
+                        command_kwargs = command.get("kwargs", {})
+
+                        self.logger.debug(f"Executing queued command: {command_func.__name__}")
+                        command_func(*command_args, **command_kwargs)
+
+                        # Wait briefly for response
+                        time.sleep(0.1)
+
+                    except Exception as e:
+                        self.logger.error(f"Error executing command: {e}")
+
+                    finally:
+                        # Resume polling
+                        self._processing = False
+
+                # Mark task as done
+                self._command_queue.task_done()
+
+            except Exception as e:
+                self.logger.error(f"Error in command queue loop: {e}")
+                if not self._persistent_mode:
+                    break
+                time.sleep(0.5)
+
+        self.logger.debug("Command Queue loop stopped")
+
+    def _persistent_receive_loop(self, auto_reconnect: bool):
+        """
+        Background loop: Continuous receive with auto-reconnect.
+
+        Purpose:
+        - Handles incoming data continuously
+        - Maintains persistent connection
+        - Auto-reconnects on disconnection
+
+        Args:
+            auto_reconnect: Enable automatic reconnection
+        """
+        self.logger.debug("Receive loop started (persistent mode)")
+        reconnect_delay = self.RECONNECT_BASE_DELAY
+
+        while self._persistent_mode and not self._shutdown_event.is_set():
+            # Reconnect if disconnected
+            if not self._connected:
+                if auto_reconnect:
+                    self.logger.info(f"Reconnecting in {reconnect_delay:.1f}s...")
+                    time.sleep(reconnect_delay)
+
+                    if self.connect() and self.authenticate():
+                        reconnect_delay = self.RECONNECT_BASE_DELAY
+                        self.logger.info("Reconnected successfully")
+                    else:
+                        reconnect_delay = min(
+                            reconnect_delay * self.RECONNECT_MULTIPLIER,
+                            self.RECONNECT_MAX_DELAY
+                        )
+                        continue
+                else:
+                    break
+
+            # Receive and process data
+            try:
+                self._receive_loop()
+            except socket.timeout:
+                # Timeout is normal, just continue
+                continue
+            except socket.error as e:
+                # Ignore errors if we're shutting down
+                if self._persistent_mode and self._connected:
+                    self.logger.error(f"Socket error in receive loop: {e}")
+                self._cleanup_socket()
+                if not auto_reconnect or not self._persistent_mode:
+                    break
+            except Exception as e:
+                if self._persistent_mode:  # Only log if not shutting down
+                    self.logger.error(f"Unexpected error in receive loop: {e}", exc_info=True)
+                self._cleanup_socket()
+                if not auto_reconnect or not self._persistent_mode:
+                    break
+
+        self.logger.debug("Receive loop stopped (persistent mode)")
+
+    def queue_command(self, func: Callable, *args, **kwargs):
+        """
+        Queue a command for execution in the command queue loop.
+
+        This allows commands to be executed without blocking the caller,
+        and ensures proper synchronization with status polling.
+
+        Args:
+            func: Command function to execute (e.g., self.set_value)
+            *args: Positional arguments for the command
+            **kwargs: Keyword arguments for the command
+        """
+        self._command_queue.put({
+            "func": func,
+            "args": args,
+            "kwargs": kwargs
+        })
+
+        if self.debug:
+            self.logger.debug(f"Queued command: {func.__name__}")
+
+    # ==================================================================================
     # Callback registration
     def on_state_snapshot(self, callback: Callable[[StateSnapshot], None]):
         """

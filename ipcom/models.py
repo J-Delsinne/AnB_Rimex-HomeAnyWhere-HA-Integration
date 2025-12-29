@@ -201,6 +201,24 @@ class StateSnapshot:
 
         return self.outputs[module - 1].copy()
 
+    @property
+    def timestamp_iso(self) -> str:
+        """
+        Get timestamp as ISO-8601 formatted string.
+
+        Returns:
+            ISO-8601 timestamp string, or current time if timestamp is None
+        """
+        from datetime import datetime
+
+        if self.timestamp is None:
+            # Use current time if no timestamp set
+            dt = datetime.now()
+        else:
+            dt = datetime.fromtimestamp(self.timestamp)
+
+        return dt.isoformat()
+
     def compare(self, other: "StateSnapshot") -> dict[tuple[int, int], tuple[int, int]]:
         """
         Compare this snapshot with another to find changes.

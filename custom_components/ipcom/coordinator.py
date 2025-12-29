@@ -1,37 +1,35 @@
-"""DataUpdateCoordinator for IPCom integration."""
+"""DataUpdateCoordinator for IPCom integration.
+
+This coordinator manages a PERSISTENT subprocess running the CLI agent.
+It does NOT poll on an interval - it receives real-time updates via stdout.
+"""
 from __future__ import annotations
 
 import asyncio
 import json
 import logging
-import subprocess
-from datetime import timedelta
+import os
 from typing import Any
 
 from homeassistant.core import HomeAssistant
-from homeassistant.helpers.update_coordinator import DataUpdateCoordinator, UpdateFailed
+from homeassistant.helpers.update_coordinator import DataUpdateCoordinator
 
-from .const import CLI_PYTHON, CLI_SCRIPT, DEFAULT_SCAN_INTERVAL, DOMAIN
+from .const import DOMAIN
 
 _LOGGER = logging.getLogger(__name__)
 
 
-class IPComCoordinator(DataUpdateCoordinator):
-    """Class to manage fetching IPCom data from CLI JSON interface.
+class IPComCoordinator(DataUpdateCoordinator[dict[str, Any]]):
+    """Coordinator to manage persistent CLI agent subprocess.
 
-    This coordinator is the ONLY interface to the IPCom system.
-    It consumes the stable CLI JSON contract (v1.0) and provides data to entities.
+    Architecture:
+    - Starts ONE persistent subprocess: `python ipcom_cli.py watch --json`
+    - CLI handles TCP connection, authentication, polling, keep-alive
+    - CLI outputs newline-delimited JSON to stdout (changes only)
+    - Coordinator applies changes to maintain full device state
+    - Coordinator updates HA entities immediately via async_set_updated_data()
 
-    The coordinator does NOT:
-    - Parse TCP packets
-    - Handle encryption
-    - Manage sockets
-    - Implement protocol logic
-
-    It ONLY:
-    - Calls `ipcom_cli.py status --json`
-    - Parses the JSON response
-    - Provides structured data to entities
+    NO polling interval - updates are event-driven from CLI output.
     """
 
     def __init__(
@@ -40,162 +38,338 @@ class IPComCoordinator(DataUpdateCoordinator):
         cli_path: str,
         host: str,
         port: int,
-        scan_interval: int = DEFAULT_SCAN_INTERVAL,
     ) -> None:
-        """Initialize the coordinator.
+        """Initialize coordinator.
 
         Args:
             hass: Home Assistant instance
-            cli_path: Path to ipcom_cli.py script
-            host: IPCom server host
-            port: IPCom server port
-            scan_interval: Update interval in seconds
+            cli_path: Absolute path to CLI directory (containing ipcom_cli.py)
+            host: IPCom host
+            port: IPCom port
         """
-        self.cli_path = cli_path
-        self.host = host
-        self.port = port
-
+        # Initialize DataUpdateCoordinator WITHOUT update_interval (no polling)
         super().__init__(
             hass,
             _LOGGER,
             name=DOMAIN,
-            update_interval=timedelta(seconds=scan_interval),
+            update_interval=None,  # NO POLLING - event-driven updates only
         )
 
-    async def _async_update_data(self) -> dict[str, Any]:
-        """Fetch data from IPCom via CLI JSON interface.
+        self._cli_path = cli_path
+        self._host = host
+        self._port = port
 
-        Returns:
-            Dictionary with structure:
-            {
-                "timestamp": "ISO-8601 datetime",
-                "devices": {
-                    "<category>.<device_key>": {
-                        "device_key": str,
-                        "display_name": str,
-                        "category": str,
-                        "type": "dimmer" | "switch",
-                        "module": int,
-                        "output": int,
-                        "value": int (0-255),
-                        "state": "on" | "off",
-                        "brightness": int (0-100, only for dimmers)
-                    }
-                }
-            }
+        # Subprocess management
+        self._process: asyncio.subprocess.Process | None = None
+        self._reader_task: asyncio.Task | None = None
+        self._shutdown = False
 
-        Raises:
-            UpdateFailed: If CLI command fails or returns invalid JSON
+        # State tracking
+        self._device_state: dict[str, dict[str, Any]] = {}  # Keyed by "category.device_key"
+        self._restart_count = 0
+        self._max_restart_attempts = 1
+
+    async def async_start(self) -> None:
+        """Start the persistent CLI subprocess and reader task.
+
+        This is called during integration setup (async_setup_entry).
         """
+        _LOGGER.info("Starting IPCom CLI agent subprocess")
+        await self._start_subprocess()
+
+    async def _start_subprocess(self) -> None:
+        """Start the CLI subprocess and reader task."""
+        if self._process is not None:
+            _LOGGER.warning("Subprocess already running, stopping first")
+            await self._stop_subprocess()
+
         try:
             # Build CLI command
+            cli_script = os.path.join(self._cli_path, "ipcom_cli.py")
             cmd = [
-                CLI_PYTHON,
-                self.cli_path,
+                "python",
+                cli_script,
+                "watch",
+                "--json",
+                "--host",
+                self._host,
+                "--port",
+                str(self._port),
+            ]
+
+            _LOGGER.debug("Starting CLI subprocess: %s", " ".join(cmd))
+
+            # Start subprocess
+            self._process = await asyncio.create_subprocess_exec(
+                *cmd,
+                stdout=asyncio.subprocess.PIPE,
+                stderr=asyncio.subprocess.PIPE,
+                cwd=self._cli_path,
+            )
+
+            # Fetch initial state via separate status command
+            await self._fetch_initial_state()
+
+            # Start reader task
+            self._reader_task = asyncio.create_task(self._read_stdout_loop())
+
+            _LOGGER.info("CLI subprocess started successfully (PID: %s)", self._process.pid)
+
+        except FileNotFoundError as err:
+            _LOGGER.error("CLI script not found: %s", cli_script)
+            raise
+        except Exception as err:
+            _LOGGER.error("Failed to start CLI subprocess: %s", err)
+            raise
+
+    async def _fetch_initial_state(self) -> None:
+        """Fetch initial device state using 'status --json' command.
+
+        This runs ONCE at startup to populate initial state before watch begins.
+        """
+        try:
+            cli_script = os.path.join(self._cli_path, "ipcom_cli.py")
+            cmd = [
+                "python",
+                cli_script,
                 "status",
                 "--json",
                 "--host",
-                self.host,
+                self._host,
                 "--port",
-                str(self.port),
+                str(self._port),
             ]
 
-            _LOGGER.debug("Running CLI command: %s", " ".join(cmd))
+            _LOGGER.debug("Fetching initial state: %s", " ".join(cmd))
 
-            # Run CLI command (blocking - run in executor)
-            result = await self.hass.async_add_executor_job(
-                self._run_cli_command, cmd
+            process = await asyncio.create_subprocess_exec(
+                *cmd,
+                stdout=asyncio.subprocess.PIPE,
+                stderr=asyncio.subprocess.PIPE,
+                cwd=self._cli_path,
             )
 
-            # Parse JSON response
-            try:
-                data = json.loads(result.stdout)
-            except json.JSONDecodeError as err:
-                _LOGGER.error("Invalid JSON from CLI: %s", result.stdout[:200])
-                raise UpdateFailed(f"Invalid JSON from CLI: {err}") from err
+            stdout, stderr = await asyncio.wait_for(process.communicate(), timeout=30.0)
 
-            # Check for error response
+            if process.returncode != 0:
+                error_msg = stderr.decode().strip() if stderr else "Unknown error"
+                _LOGGER.error("Initial state fetch failed: %s", error_msg)
+                return
+
+            # Parse JSON
+            data = json.loads(stdout.decode())
+
             if "error" in data:
-                error_msg = data.get("error", "Unknown error")
-                _LOGGER.error("CLI returned error: %s", error_msg)
-                raise UpdateFailed(f"CLI error: {error_msg}")
+                _LOGGER.error("CLI returned error: %s", data["error"])
+                return
 
-            # Validate response structure
-            if "devices" not in data or "timestamp" not in data:
-                _LOGGER.error("Invalid CLI response structure: %s", list(data.keys()))
-                raise UpdateFailed("Invalid CLI response: missing required fields")
-
-            # Transform device list into dict keyed by "<category>.<device_key>"
-            devices = {}
-            for device in data["devices"]:
+            # Build initial device state
+            self._device_state = {}
+            for device in data.get("devices", []):
                 device_key = device.get("device_key")
                 category = device.get("category")
 
                 if not device_key or not category:
-                    _LOGGER.warning("Device missing key or category: %s", device)
                     continue
 
                 entity_key = f"{category}.{device_key}"
-                devices[entity_key] = device
+                self._device_state[entity_key] = device
 
-            _LOGGER.debug(
-                "Coordinator update successful: %d devices at %s",
-                len(devices),
-                data.get("timestamp"),
-            )
+            _LOGGER.info("Initial state loaded: %d devices", len(self._device_state))
 
-            return {
-                "timestamp": data["timestamp"],
-                "devices": devices,
-            }
+            # Notify coordinator that initial data is ready
+            self.async_set_updated_data({
+                "timestamp": data.get("timestamp"),
+                "devices": self._device_state,
+            })
 
-        except subprocess.CalledProcessError as err:
-            _LOGGER.error(
-                "CLI command failed (exit %d): %s",
-                err.returncode,
-                err.stderr[:200] if err.stderr else "no stderr",
-            )
-            raise UpdateFailed(f"CLI command failed: {err}") from err
-
+        except asyncio.TimeoutError:
+            _LOGGER.error("Initial state fetch timed out")
+        except json.JSONDecodeError as err:
+            _LOGGER.error("Invalid JSON from initial state: %s", err)
         except Exception as err:
-            _LOGGER.error("Unexpected error updating IPCom data: %s", err)
-            raise UpdateFailed(f"Unexpected error: {err}") from err
+            _LOGGER.error("Unexpected error fetching initial state: %s", err)
 
-    def _run_cli_command(self, cmd: list[str]) -> subprocess.CompletedProcess:
-        """Run CLI command synchronously (called via executor).
+    async def _read_stdout_loop(self) -> None:
+        """Read stdout from CLI subprocess line-by-line and apply changes.
+
+        This task runs continuously until shutdown or subprocess exits.
+        """
+        _LOGGER.debug("Starting stdout reader loop")
+
+        try:
+            while not self._shutdown and self._process:
+                # Read one line (newline-delimited JSON)
+                line = await self._process.stdout.readline()
+
+                if not line:
+                    # EOF - subprocess exited
+                    _LOGGER.warning("CLI subprocess exited unexpectedly")
+                    await self._handle_subprocess_exit()
+                    break
+
+                # Parse JSON line
+                try:
+                    data = json.loads(line.decode().strip())
+                except json.JSONDecodeError as err:
+                    _LOGGER.warning("Invalid JSON line from CLI: %s", err)
+                    continue
+
+                # Apply changes to state
+                self._apply_changes(data)
+
+        except asyncio.CancelledError:
+            _LOGGER.debug("Reader task cancelled")
+            raise
+        except Exception as err:
+            _LOGGER.error("Error in stdout reader loop: %s", err)
+            await self._handle_subprocess_exit()
+
+    def _apply_changes(self, data: dict[str, Any]) -> None:
+        """Apply changes from watch output to device state.
 
         Args:
-            cmd: Command list to execute
-
-        Returns:
-            Completed process with stdout/stderr
-
-        Raises:
-            subprocess.CalledProcessError: If command fails
+            data: JSON object from CLI watch output with structure:
+                {
+                    "timestamp": "ISO-8601",
+                    "changes": [
+                        {
+                            "module": int,
+                            "output": int,
+                            "old": int,
+                            "new": int,
+                            "device_key": str (optional),
+                            "display_name": str (optional),
+                            "category": str (optional)
+                        }
+                    ]
+                }
         """
-        import os
+        changes = data.get("changes", [])
+        timestamp = data.get("timestamp")
 
-        # Get CLI directory to set as working directory
-        cli_dir = os.path.dirname(self.cli_path)
+        if not changes:
+            # No changes - skip update
+            return
 
-        result = subprocess.run(
-            cmd,
-            capture_output=True,
-            text=True,
-            check=True,
-            timeout=30,  # 30 second timeout
-            cwd=cli_dir,  # Set working directory to CLI location
-        )
-        return result
+        # Apply each change to device state
+        updated = False
+        for change in changes:
+            device_key = change.get("device_key")
+            category = change.get("category")
+            new_value = change.get("new")
+
+            if not device_key or not category:
+                # Unmapped device - skip
+                continue
+
+            entity_key = f"{category}.{device_key}"
+
+            # Update device state
+            if entity_key in self._device_state:
+                device = self._device_state[entity_key]
+                device["value"] = new_value
+                device["state"] = "on" if new_value > 0 else "off"
+
+                # Update brightness for dimmers
+                if device.get("type") == "dimmer":
+                    module = device.get("module")
+                    if module == 6:
+                        # EXO DIM: Value is 0-100 directly
+                        device["brightness"] = new_value
+                    else:
+                        # Regular dimmer: Convert 0-255 to 0-100
+                        device["brightness"] = int((new_value / 255) * 100) if new_value > 0 else 0
+
+                updated = True
+            else:
+                _LOGGER.debug("Change for unknown device: %s", entity_key)
+
+        # Notify Home Assistant of updated data
+        if updated:
+            self.async_set_updated_data({
+                "timestamp": timestamp,
+                "devices": self._device_state,
+            })
+
+    async def _handle_subprocess_exit(self) -> None:
+        """Handle unexpected subprocess exit with auto-restart logic."""
+        if self._shutdown:
+            # Expected shutdown - do nothing
+            return
+
+        _LOGGER.error("CLI subprocess exited unexpectedly")
+
+        # Auto-restart once
+        if self._restart_count < self._max_restart_attempts:
+            self._restart_count += 1
+            _LOGGER.warning("Attempting to restart CLI subprocess (attempt %d/%d)",
+                          self._restart_count, self._max_restart_attempts)
+
+            try:
+                await self._start_subprocess()
+                _LOGGER.info("CLI subprocess restarted successfully")
+            except Exception as err:
+                _LOGGER.error("Failed to restart CLI subprocess: %s", err)
+                self._mark_unavailable()
+        else:
+            _LOGGER.error("Max restart attempts reached - marking integration unavailable")
+            self._mark_unavailable()
+
+    def _mark_unavailable(self) -> None:
+        """Mark all entities as unavailable."""
+        # Set last_update_success to False to mark entities unavailable
+        self.last_update_success = False
+        self.async_update_listeners()
+
+    async def _stop_subprocess(self) -> None:
+        """Stop the CLI subprocess gracefully."""
+        _LOGGER.debug("Stopping CLI subprocess")
+
+        # Cancel reader task
+        if self._reader_task and not self._reader_task.done():
+            self._reader_task.cancel()
+            try:
+                await self._reader_task
+            except asyncio.CancelledError:
+                pass
+
+        # Terminate subprocess
+        if self._process:
+            try:
+                self._process.terminate()
+                await asyncio.wait_for(self._process.wait(), timeout=5.0)
+                _LOGGER.info("CLI subprocess stopped gracefully")
+            except asyncio.TimeoutError:
+                _LOGGER.warning("CLI subprocess did not stop gracefully, killing")
+                self._process.kill()
+                await self._process.wait()
+            except Exception as err:
+                _LOGGER.error("Error stopping subprocess: %s", err)
+
+        self._process = None
+        self._reader_task = None
+
+    async def async_shutdown(self) -> None:
+        """Shutdown coordinator and stop subprocess.
+
+        Called during integration unload or HA shutdown.
+        """
+        _LOGGER.info("Shutting down IPCom coordinator")
+        self._shutdown = True
+        await self._stop_subprocess()
 
     async def async_execute_command(
         self, device_key: str, command: str, value: int | None = None
     ) -> bool:
-        """Execute a control command via CLI.
+        """Execute a control command via separate CLI subprocess.
+
+        This spawns a SHORT-LIVED CLI process to execute the command.
+        The persistent watch process continues running in the background.
 
         Args:
             device_key: Device identifier (e.g., "keuken")
-            command: Command to execute ("on", "off", "toggle", "dim")
+            command: Command to execute ("on", "off", "dim")
             value: Optional value for dim command (0-100)
 
         Returns:
@@ -203,49 +377,56 @@ class IPComCoordinator(DataUpdateCoordinator):
         """
         try:
             # Build command
+            cli_script = os.path.join(self._cli_path, "ipcom_cli.py")
             cmd = [
-                CLI_PYTHON,
-                self.cli_path,
+                "python",
+                cli_script,
                 command,
                 device_key,
             ]
 
-            # Add value for dim command (must come after device_key)
+            # Add value for dim command
             if command == "dim" and value is not None:
-                cmd.append(str(value))  # Append after device_key
+                cmd.append(str(value))
 
             # Add connection parameters
             cmd.extend([
                 "--host",
-                self.host,
+                self._host,
                 "--port",
-                str(self.port),
+                str(self._port),
             ])
 
             _LOGGER.debug("Executing command: %s", " ".join(cmd))
 
-            # Run command
-            result = await self.hass.async_add_executor_job(
-                self._run_cli_command, cmd
+            # Execute subprocess
+            process = await asyncio.create_subprocess_exec(
+                *cmd,
+                stdout=asyncio.subprocess.PIPE,
+                stderr=asyncio.subprocess.PIPE,
+                cwd=self._cli_path,
             )
 
-            _LOGGER.debug("Command successful: %s", result.stdout.strip())
+            stdout, stderr = await asyncio.wait_for(
+                process.communicate(), timeout=10.0
+            )
 
-            # Don't force immediate refresh - let the regular polling cycle update state
-            # This prevents commands from blocking each other (Issue #2: roller shutters)
-            # The TCP client maintains state internally, so the next poll will reflect changes
-            # await self.async_request_refresh()  # REMOVED to fix concurrent operations
+            if process.returncode != 0:
+                error_msg = stderr.decode().strip() if stderr else "Unknown error"
+                _LOGGER.error(
+                    "Command failed (exit %d): %s", process.returncode, error_msg
+                )
+                return False
+
+            _LOGGER.debug("Command successful: %s", stdout.decode().strip())
+
+            # State update will arrive via watch process - no need to refresh
 
             return True
 
-        except subprocess.CalledProcessError as err:
-            _LOGGER.error(
-                "Command failed (exit %d): %s",
-                err.returncode,
-                err.stderr[:200] if err.stderr else "no stderr",
-            )
+        except asyncio.TimeoutError:
+            _LOGGER.error("Command timed out after 10s")
             return False
-
         except Exception as err:
-            _LOGGER.error("Unexpected error executing command: %s", err)
+            _LOGGER.error("Error executing command: %s", err)
             return False

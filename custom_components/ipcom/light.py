@@ -25,43 +25,24 @@ async def async_setup_entry(
     entry: ConfigEntry,
     async_add_entities: AddEntitiesCallback,
 ) -> None:
-    """Set up IPCom lights from a config entry.
+    """Set up IPCom lights from config entry."""
+    coordinator: IPComCoordinator = hass.data[DOMAIN][entry.entry_id]
 
-    This function is called when the integration is loaded.
-    It creates light entities for all devices with category="lights".
-    """
-    coordinator: IPComCoordinator = hass.data[DOMAIN][entry.entry_id]["coordinator"]
-
-    # Create entities for all light devices
     entities = []
+    for entity_key, device_data in coordinator.data["devices"].items():
+        category = device_data.get("category")
+        if category == "lights":
+            device_type = device_data.get("type", "switch")
+            if device_type == "dimmer":
+                entities.append(IPComDimmerLight(coordinator, entity_key, device_data))
+            else:
+                entities.append(IPComLight(coordinator, entity_key, device_data))
 
-    if coordinator.data and "devices" in coordinator.data:
-        for entity_key, device_data in coordinator.data["devices"].items():
-            category = device_data.get("category")
-
-            # Only create entities for lights category
-            if category == "lights":
-                device_type = device_data.get("type", "switch")
-
-                if device_type == "dimmer":
-                    entity = IPComDimmableLight(coordinator, entity_key, device_data)
-                else:
-                    entity = IPComLight(coordinator, entity_key, device_data)
-
-                entities.append(entity)
-
-    if entities:
-        _LOGGER.info("Adding %d light entities", len(entities))
-        async_add_entities(entities)
-    else:
-        _LOGGER.warning("No light entities found in coordinator data")
+    async_add_entities(entities)
 
 
-class IPComLight(CoordinatorEntity, LightEntity):
-    """Representation of an IPCom on/off light (switch type).
-
-    This entity represents a non-dimmable light controlled via the CLI.
-    """
+class IPComLight(CoordinatorEntity[IPComCoordinator], LightEntity):
+    """Representation of an IPCom on/off light."""
 
     def __init__(
         self,
@@ -69,81 +50,49 @@ class IPComLight(CoordinatorEntity, LightEntity):
         entity_key: str,
         device_data: dict[str, Any],
     ) -> None:
-        """Initialize the light.
-
-        Args:
-            coordinator: Data coordinator
-            entity_key: Unique key from coordinator (category.device_key)
-            device_data: Device data from CLI JSON
-        """
+        """Initialize the light."""
         super().__init__(coordinator)
-
         self._entity_key = entity_key
         self._device_key = device_data["device_key"]
         self._attr_unique_id = f"ipcom_{self._device_key}"
         self._attr_name = device_data.get("display_name", self._device_key.upper())
-
-        # Store module/output for debugging
-        self._module = device_data.get("module")
-        self._output = device_data.get("output")
-
-        # On/off light has single color mode
         self._attr_color_mode = ColorMode.ONOFF
         self._attr_supported_color_modes = {ColorMode.ONOFF}
 
+        # Store device metadata for device_info
+        self._module = device_data.get("module")
+        self._output = device_data.get("output")
+
     @property
     def device_info(self) -> dict[str, Any]:
-        """Return device information."""
+        """Return device information for grouping in HA UI."""
         return {
-            "identifiers": {(DOMAIN, self._device_key)},
+            "identifiers": {(DOMAIN, self._attr_unique_id)},
             "name": self._attr_name,
             "manufacturer": "Home Anywhere Blue",
-            "model": "IPCom Switch",
-            "sw_version": f"Module {self._module}, Output {self._output}",
+            "model": "IPCom Light",
+            "sw_version": f"Module {self._module}",
         }
 
     @property
     def is_on(self) -> bool:
-        """Return true if light is on."""
-        if not self.coordinator.data or "devices" not in self.coordinator.data:
-            return False
-
+        """Return True if light is on."""
         device_data = self.coordinator.data["devices"].get(self._entity_key)
         if not device_data:
             return False
-
-        # Use state field from CLI JSON contract
-        state = device_data.get("state", "off")
-        return state == "on"
+        return device_data.get("state") == "on"
 
     async def async_turn_on(self, **kwargs: Any) -> None:
-        """Turn the light on via CLI."""
-        _LOGGER.debug("Turning on %s", self._device_key)
-
-        success = await self.coordinator.async_execute_command(
-            self._device_key, "on"
-        )
-
-        if not success:
-            _LOGGER.error("Failed to turn on %s", self._device_key)
+        """Turn the light on."""
+        await self.coordinator.async_execute_command(self._device_key, "on")
 
     async def async_turn_off(self, **kwargs: Any) -> None:
-        """Turn the light off via CLI."""
-        _LOGGER.debug("Turning off %s", self._device_key)
-
-        success = await self.coordinator.async_execute_command(
-            self._device_key, "off"
-        )
-
-        if not success:
-            _LOGGER.error("Failed to turn off %s", self._device_key)
+        """Turn the light off."""
+        await self.coordinator.async_execute_command(self._device_key, "off")
 
 
-class IPComDimmableLight(IPComLight):
-    """Representation of an IPCom dimmable light.
-
-    This entity extends IPComLight to add brightness control.
-    """
+class IPComDimmerLight(IPComLight):
+    """Representation of an IPCom dimmable light."""
 
     def __init__(
         self,
@@ -153,66 +102,33 @@ class IPComDimmableLight(IPComLight):
     ) -> None:
         """Initialize the dimmable light."""
         super().__init__(coordinator, entity_key, device_data)
-
-        # Dimmable light supports brightness
         self._attr_color_mode = ColorMode.BRIGHTNESS
         self._attr_supported_color_modes = {ColorMode.BRIGHTNESS}
 
     @property
-    def device_info(self) -> dict[str, Any]:
-        """Return device information."""
-        info = super().device_info
-        info["model"] = "IPCom Dimmer"
-        return info
-
-    @property
     def brightness(self) -> int | None:
-        """Return the brightness of the light (0-255).
-
-        The CLI JSON contract returns brightness as 0-100 for all modules.
-        Module 6 (EXO DIM) values are already correct 0-100, and this scaling
-        to Home Assistant's 0-255 range works correctly for all modules.
-        """
-        if not self.coordinator.data or "devices" not in self.coordinator.data:
-            return None
-
+        """Return the brightness of the light (0-255)."""
         device_data = self.coordinator.data["devices"].get(self._entity_key)
         if not device_data:
             return None
 
-        # Get brightness from CLI (0-100)
-        cli_brightness = device_data.get("brightness")
-        if cli_brightness is None:
-            return None
-
-        # Scale from 0-100 to 0-255 (Home Assistant standard)
+        # CLI returns brightness 0-100
+        cli_brightness = device_data.get("brightness", 0)
+        # Convert to HA's 0-255 range
         return int((cli_brightness / 100) * 255)
 
     async def async_turn_on(self, **kwargs: Any) -> None:
         """Turn the light on, optionally setting brightness."""
-        # Check if brightness was specified
         if ATTR_BRIGHTNESS in kwargs:
-            # Scale brightness from HA (0-255) to CLI (0-100)
+            # Convert HA brightness (0-255) to CLI (0-100)
             ha_brightness = kwargs[ATTR_BRIGHTNESS]
             cli_brightness = int((ha_brightness / 255) * 100)
-
             # Ensure minimum brightness of 1% when turning on
             if cli_brightness == 0:
                 cli_brightness = 1
-
-            _LOGGER.debug(
-                "Setting %s brightness to %d%% (HA: %d)",
-                self._device_key,
-                cli_brightness,
-                ha_brightness,
-            )
-
-            success = await self.coordinator.async_execute_command(
+            await self.coordinator.async_execute_command(
                 self._device_key, "dim", cli_brightness
             )
-
-            if not success:
-                _LOGGER.error("Failed to set brightness for %s", self._device_key)
         else:
             # No brightness specified, just turn on
-            await super().async_turn_on(**kwargs)
+            await self.coordinator.async_execute_command(self._device_key, "on")
