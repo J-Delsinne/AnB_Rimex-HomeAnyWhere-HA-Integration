@@ -128,6 +128,7 @@ async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
         _LOGGER.error("Entry data: %s", entry.data)
         return False
 
+    _LOGGER.critical("STEP 1: Configuration extracted successfully")
     _LOGGER.info(
         "Setting up IPCom integration: %s:%d (scan_interval=%ds, cli=%s)",
         host,
@@ -137,38 +138,51 @@ async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
     )
 
     # Validate CLI path exists
+    _LOGGER.critical("STEP 2: Checking if CLI path exists: %s", cli_path)
     if not os.path.exists(cli_path):
         _LOGGER.error("CLI script not found at: %s", cli_path)
         return False
+    _LOGGER.critical("STEP 2: CLI path exists!")
 
     # Create coordinator
-    coordinator = IPComCoordinator(
-        hass=hass,
-        cli_path=cli_path,
-        host=host,
-        port=port,
-        scan_interval=scan_interval,
-    )
+    _LOGGER.critical("STEP 3: Creating IPComCoordinator...")
+    try:
+        coordinator = IPComCoordinator(
+            hass=hass,
+            cli_path=cli_path,
+            host=host,
+            port=port,
+            scan_interval=scan_interval,
+        )
+        _LOGGER.critical("STEP 3: Coordinator created successfully")
+    except Exception as e:
+        _LOGGER.error("STEP 3 FAILED: Error creating coordinator: %s", e, exc_info=True)
+        return False
 
     # Start persistent connection
+    _LOGGER.critical("STEP 4: Starting persistent connection...")
     try:
         success = await coordinator.async_start()
+        _LOGGER.critical("STEP 4: async_start returned: %s", success)
         if not success:
             _LOGGER.error("Failed to start persistent connection")
             return False
     except Exception as err:
-        _LOGGER.error("Failed to start persistent connection: %s", err)
+        _LOGGER.error("Failed to start persistent connection: %s", err, exc_info=True)
         return False
 
     # Wait briefly for initial data
+    _LOGGER.critical("STEP 5: Waiting for initial data refresh...")
     try:
         await coordinator.async_config_entry_first_refresh()
+        _LOGGER.critical("STEP 5: First refresh completed")
     except Exception as err:
-        _LOGGER.error("Failed to fetch initial data from IPCom: %s", err)
+        _LOGGER.error("Failed to fetch initial data from IPCom: %s", err, exc_info=True)
         await coordinator.async_stop()
         return False
 
     # Store coordinator
+    _LOGGER.critical("STEP 6: Storing coordinator in hass.data...")
     hass.data.setdefault(DOMAIN, {})
     hass.data[DOMAIN][entry.entry_id] = {
         "coordinator": coordinator,
@@ -176,10 +190,14 @@ async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
         "host": host,
         "port": port,
     }
+    _LOGGER.critical("STEP 6: Coordinator stored")
 
     # Forward setup to platforms
+    _LOGGER.critical("STEP 7: Forwarding setup to platforms: %s", PLATFORMS)
     await hass.config_entries.async_forward_entry_setups(entry, PLATFORMS)
+    _LOGGER.critical("STEP 7: Platform setup forwarded")
 
+    _LOGGER.critical("STEP 8: Integration setup complete!")
     _LOGGER.info(
         "IPCom integration loaded: %d devices found",
         len(coordinator.data.get("devices", {})) if coordinator.data else 0,
