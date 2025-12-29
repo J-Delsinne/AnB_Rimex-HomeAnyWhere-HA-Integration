@@ -119,19 +119,12 @@ class IPComCoordinator(DataUpdateCoordinator):
                     }
 
                     # Trigger coordinator update without fetching (data is already fresh)
-                    # Schedule the update in the event loop (async_set_updated_data is a coroutine)
-                    _LOGGER.critical("📡 Scheduling coordinator update via call_soon_threadsafe")
-
-                    # We need to schedule a coroutine from a worker thread
-                    # Use asyncio.run_coroutine_threadsafe or create_task via call_soon_threadsafe
-                    def schedule_update():
-                        import asyncio
-                        asyncio.create_task(
-                            self.async_set_updated_data(self._latest_data)
-                        )
-
-                    self.hass.loop.call_soon_threadsafe(schedule_update)
-                    _LOGGER.critical("📡 Coordinator update scheduled successfully")
+                    # async_set_updated_data is synchronous despite its name - just call it
+                    _LOGGER.critical("📡 Updating coordinator data via call_soon_threadsafe")
+                    self.hass.loop.call_soon_threadsafe(
+                        self.async_set_updated_data, self._latest_data
+                    )
+                    _LOGGER.critical("📡 Coordinator update completed")
 
                 except Exception as e:
                     _LOGGER.error(f"Error processing snapshot callback: {e}", exc_info=True)
