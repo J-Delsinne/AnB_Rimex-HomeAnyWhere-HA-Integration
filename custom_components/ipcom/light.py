@@ -106,14 +106,18 @@ class IPComLight(CoordinatorEntity, LightEntity):
     def is_on(self) -> bool:
         """Return true if light is on."""
         if not self.coordinator.data or "devices" not in self.coordinator.data:
+            _LOGGER.warning("Light %s: No coordinator data", self._device_key)
             return False
 
         device_data = self.coordinator.data["devices"].get(self._entity_key)
         if not device_data:
+            _LOGGER.warning("Light %s: Entity key '%s' not found in coordinator data. Available keys: %s",
+                          self._device_key, self._entity_key, list(self.coordinator.data["devices"].keys())[:5])
             return False
 
         # Use state field from CLI JSON contract
         state = device_data.get("state", "off")
+        _LOGGER.debug("Light %s: state=%s (value=%s)", self._device_key, state, device_data.get("value"))
         return state == "on"
 
     async def async_turn_on(self, **kwargs: Any) -> None:
