@@ -279,6 +279,11 @@ class IPComClient:
         self._polling_enabled = False
         self._processing = False
 
+        # Shadow state: tracks pending writes that haven't been confirmed by server yet
+        # This prevents race conditions when rapid commands overwrite each other
+        # Format: {module_number: [val1, val2, ..., val8]}
+        self._pending_writes: dict[int, list[int]] = {}
+
         # Encryption and authentication (from AUTH_HANDSHAKE_SPEC.md)
         self._encryption = IPComEncryption()
         self._authenticated = False
@@ -724,6 +729,9 @@ class IPComClient:
                     # Store latest snapshot
                     self._latest_snapshot = snapshot
 
+                    # Clear shadow state - server has confirmed the state
+                    self._pending_writes.clear()
+
                     # Trigger callback
                     if self._on_state_snapshot:
                         self._on_state_snapshot(snapshot)
@@ -891,6 +899,9 @@ class IPComClient:
 
             # Store latest
             self._latest_snapshot = snapshot
+
+            # Clear shadow state - server has confirmed the state
+            self._pending_writes.clear()
 
             if self.debug:
                 self.logger.debug(f"State snapshot received: {snapshot}")
@@ -1107,11 +1118,20 @@ class IPComClient:
         if not self._latest_snapshot:
             raise RuntimeError("No state snapshot available yet (need current values)")
 
-        # Get current module values from snapshot
-        values = self._latest_snapshot.get_module_values(module)
+        # Get current module values from shadow state (pending writes) or snapshot
+        # This prevents race condition where rapid commands overwrite each other
+        if module in self._pending_writes:
+            # Use shadow state (includes pending writes not yet confirmed)
+            values = self._pending_writes[module].copy()
+        else:
+            # No pending writes, use snapshot
+            values = self._latest_snapshot.get_module_values(module)
 
         # Update target output while preserving others
         values[output - 1] = value
+
+        # Store in shadow state so next command sees this pending write
+        self._pending_writes[module] = values
 
         # Use frame_builder to construct the proper command
         from frame_builder import build_exo_set_values_frame, build_frame_request_command
