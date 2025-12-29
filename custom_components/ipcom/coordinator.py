@@ -94,7 +94,12 @@ class IPComCoordinator(DataUpdateCoordinator):
             _LOGGER.critical("Creating IPComClient...")
             self._client = IPComClient(host=self.host, port=self.port, debug=False)
             _LOGGER.critical("Creating DeviceMapper...")
-            self._device_mapper = DeviceMapper()
+
+            # DeviceMapper needs the full path to devices.yaml
+            devices_yaml_path = os.path.join(cli_dir, "devices.yaml")
+            _LOGGER.critical("Loading devices from: %s", devices_yaml_path)
+            self._device_mapper = DeviceMapper(config_file=devices_yaml_path)
+            _LOGGER.critical("DeviceMapper created with %d devices", len(self._device_mapper.devices))
             _LOGGER.critical("Client and mapper created")
 
             # Register callback for state updates
