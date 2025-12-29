@@ -91,8 +91,11 @@ class IPComCoordinator(DataUpdateCoordinator):
             def on_snapshot(snapshot):
                 """Handle state snapshot updates from background loop."""
                 try:
+                    _LOGGER.debug(f"Received snapshot callback (timestamp: {snapshot.timestamp})")
+
                     # Convert snapshot to device data
                     devices_data = self._snapshot_to_devices(snapshot)
+                    _LOGGER.debug(f"Converted snapshot to {len(devices_data)} devices")
 
                     # Store latest data
                     self._latest_data = {
@@ -102,9 +105,11 @@ class IPComCoordinator(DataUpdateCoordinator):
 
                     # Trigger coordinator update without fetching (data is already fresh)
                     # Schedule the update in the event loop
+                    _LOGGER.debug("Scheduling coordinator update via call_soon_threadsafe")
                     self.hass.loop.call_soon_threadsafe(
                         lambda: self.async_set_updated_data(self._latest_data)
                     )
+                    _LOGGER.debug("Coordinator update scheduled successfully")
 
                 except Exception as e:
                     _LOGGER.error(f"Error processing snapshot callback: {e}", exc_info=True)
@@ -123,6 +128,19 @@ class IPComCoordinator(DataUpdateCoordinator):
                     self.host,
                     self.port
                 )
+
+                # Give the persistent connection a moment to receive first snapshot
+                # The status poll loop runs every 350ms, so wait up to 1 second
+                _LOGGER.debug("Waiting for first snapshot to arrive...")
+                for i in range(10):  # Wait up to 1 second (10 * 0.1s)
+                    if self._latest_data:
+                        _LOGGER.info(f"First snapshot received after {(i+1)*0.1:.1f}s with {len(self._latest_data.get('devices', {}))} devices")
+                        break
+                    await asyncio.sleep(0.1)
+
+                if not self._latest_data:
+                    _LOGGER.warning("No snapshot received after 1 second - will continue waiting in background")
+
             else:
                 _LOGGER.error("Failed to start persistent connection")
 
@@ -212,9 +230,11 @@ class IPComCoordinator(DataUpdateCoordinator):
         """
         # If we have recent data from callback, return it
         if self._latest_data:
+            _LOGGER.debug(f"Returning cached data with {len(self._latest_data.get('devices', {}))} devices")
             return self._latest_data
 
         # No data available yet
+        _LOGGER.debug(f"No cached data available. Client connected: {self._client.is_connected() if self._client else False}")
         if not self._client or not self._client.is_connected():
             raise UpdateFailed("Persistent connection not established")
 
