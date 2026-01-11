@@ -32,7 +32,7 @@ stderr.txt
 outputmapping.txt
 nul
 ha_reverse/
-
+DEPLOYMENT_SUMMARY.md
 
 # Build artifacts
 build/
