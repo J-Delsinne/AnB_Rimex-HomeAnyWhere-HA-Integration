@@ -9,6 +9,7 @@ import asyncio
 import json
 import logging
 import os
+import time
 from typing import Any
 
 from homeassistant.core import HomeAssistant
@@ -68,6 +69,11 @@ class IPComCoordinator(DataUpdateCoordinator[dict[str, Any]]):
         self._device_state: dict[str, dict[str, Any]] = {}  # Keyed by "category.device_key"
         self._restart_count = 0
         self._max_restart_attempts = 1
+
+        # Command throttling to prevent overwhelming the IPCom server
+        self._command_lock = asyncio.Lock()
+        self._command_delay = 0.5  # 500ms delay between commands
+        self._last_command_time: float = 0.0
 
     async def async_start(self) -> None:
         """Start the persistent CLI subprocess and reader task.
@@ -367,6 +373,10 @@ class IPComCoordinator(DataUpdateCoordinator[dict[str, Any]]):
         This spawns a SHORT-LIVED CLI process to execute the command.
         The persistent watch process continues running in the background.
 
+        Commands are throttled with a delay between executions to prevent
+        overwhelming the IPCom server when multiple commands are sent rapidly
+        (e.g., automations turning off all lights).
+
         Args:
             device_key: Device identifier (e.g., "keuken")
             command: Command to execute ("on", "off", "dim")
@@ -375,58 +385,76 @@ class IPComCoordinator(DataUpdateCoordinator[dict[str, Any]]):
         Returns:
             True if command succeeded, False otherwise
         """
-        try:
-            # Build command
-            cli_script = os.path.join(self._cli_path, "ipcom_cli.py")
-            cmd = [
-                "python",
-                cli_script,
-                command,
-                device_key,
-            ]
+        # Acquire lock to ensure commands execute serially
+        async with self._command_lock:
+            # Calculate delay needed since last command
+            now = time.time()
+            time_since_last = now - self._last_command_time
 
-            # Add value for dim command
-            if command == "dim" and value is not None:
-                cmd.append(str(value))
-
-            # Add connection parameters
-            cmd.extend([
-                "--host",
-                self._host,
-                "--port",
-                str(self._port),
-            ])
-
-            _LOGGER.debug("Executing command: %s", " ".join(cmd))
-
-            # Execute subprocess
-            process = await asyncio.create_subprocess_exec(
-                *cmd,
-                stdout=asyncio.subprocess.PIPE,
-                stderr=asyncio.subprocess.PIPE,
-                cwd=self._cli_path,
-            )
-
-            stdout, stderr = await asyncio.wait_for(
-                process.communicate(), timeout=10.0
-            )
-
-            if process.returncode != 0:
-                error_msg = stderr.decode().strip() if stderr else "Unknown error"
-                _LOGGER.error(
-                    "Command failed (exit %d): %s", process.returncode, error_msg
+            if time_since_last < self._command_delay:
+                delay_needed = self._command_delay - time_since_last
+                _LOGGER.debug(
+                    "Throttling command to %s: waiting %.0fms",
+                    device_key,
+                    delay_needed * 1000
                 )
+                await asyncio.sleep(delay_needed)
+
+            try:
+                # Build command
+                cli_script = os.path.join(self._cli_path, "ipcom_cli.py")
+                cmd = [
+                    "python",
+                    cli_script,
+                    command,
+                    device_key,
+                ]
+
+                # Add value for dim command
+                if command == "dim" and value is not None:
+                    cmd.append(str(value))
+
+                # Add connection parameters
+                cmd.extend([
+                    "--host",
+                    self._host,
+                    "--port",
+                    str(self._port),
+                ])
+
+                _LOGGER.debug("Executing command: %s", " ".join(cmd))
+
+                # Execute subprocess
+                process = await asyncio.create_subprocess_exec(
+                    *cmd,
+                    stdout=asyncio.subprocess.PIPE,
+                    stderr=asyncio.subprocess.PIPE,
+                    cwd=self._cli_path,
+                )
+
+                stdout, stderr = await asyncio.wait_for(
+                    process.communicate(), timeout=10.0
+                )
+
+                if process.returncode != 0:
+                    error_msg = stderr.decode().strip() if stderr else "Unknown error"
+                    _LOGGER.error(
+                        "Command failed (exit %d): %s", process.returncode, error_msg
+                    )
+                    return False
+
+                _LOGGER.debug("Command successful: %s", stdout.decode().strip())
+
+                # Update timestamp for throttling
+                self._last_command_time = time.time()
+
+                # State update will arrive via watch process - no need to refresh
+
+                return True
+
+            except asyncio.TimeoutError:
+                _LOGGER.error("Command timed out after 10s")
                 return False
-
-            _LOGGER.debug("Command successful: %s", stdout.decode().strip())
-
-            # State update will arrive via watch process - no need to refresh
-
-            return True
-
-        except asyncio.TimeoutError:
-            _LOGGER.error("Command timed out after 10s")
-            return False
-        except Exception as err:
-            _LOGGER.error("Error executing command: %s", err)
-            return False
+            except Exception as err:
+                _LOGGER.error("Error executing command: %s", err)
+                return False
