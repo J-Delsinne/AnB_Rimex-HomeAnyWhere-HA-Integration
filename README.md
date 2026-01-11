@@ -363,14 +363,6 @@ python ipcom/ipcom_cli.py status --json | grep relay_role
 cat ipcom/devices.yaml | grep -A 5 "shutters:"
 ```
 
----
-
-## Documentation
-
-- **[DEPLOYMENT_SUMMARY.md](DEPLOYMENT_SUMMARY.md)** - Complete deployment guide
-- **[MODULE_6_QUICK_REFERENCE.md](MODULE_6_QUICK_REFERENCE.md)** - EXO DIM dimmer reference
-- **[COVER_DEPLOYMENT.md](COVER_DEPLOYMENT.md)** - Shutter deployment guide
-- **[CODEBASE_SANITATION_REPORT.md](CODEBASE_SANITATION_REPORT.md)** - Cleanup report
 
 ---
 
@@ -382,7 +374,7 @@ This project reverse engineers the proprietary Home Anywhere Blue IPCom protocol
 
 ## Credits
 
-Reverse engineered from the official Home Anywhere Blue Android app.
+Reverse engineered from the official Home Anywhere Blue app.
 
 **Protocol Details**:
 - XOR-based encryption with dual keys
