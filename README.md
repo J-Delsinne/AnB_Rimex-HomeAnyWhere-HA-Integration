@@ -1,4 +1,4 @@
-# IPCom Home Anywhere Blue - Home Assistant Integration
+# IPCom Home Anywhere Blue - Home Assistant Integration (UnOfficial)
 
 Control your Home Anywhere Blue home automation system from Home Assistant.
 
