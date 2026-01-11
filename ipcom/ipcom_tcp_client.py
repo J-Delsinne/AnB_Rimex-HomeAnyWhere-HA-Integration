@@ -338,17 +338,42 @@ class IPComClient:
             return True
 
         except socket.timeout:
-            self.logger.error(f"Connection timeout after {self.SOCKET_TIMEOUT}s")
+            self.logger.error(
+                "Connection timeout after %.1fs - host %s:%s may be unreachable or slow",
+                self.SOCKET_TIMEOUT, self.host, self.port
+            )
+            self._cleanup_socket()
+            return False
+
+        except socket.gaierror as e:
+            self.logger.error(
+                "DNS resolution failed for %s: %s - check hostname/network",
+                self.host, e
+            )
+            self._cleanup_socket()
+            return False
+
+        except ConnectionRefusedError as e:
+            self.logger.error(
+                "Connection refused by %s:%s - IPCom server may be down or port blocked",
+                self.host, self.port
+            )
             self._cleanup_socket()
             return False
 
         except socket.error as e:
-            self.logger.error(f"Connection failed: {e}")
+            self.logger.error(
+                "Socket error connecting to %s:%s: %s (errno: %s)",
+                self.host, self.port, e, getattr(e, 'errno', 'N/A')
+            )
             self._cleanup_socket()
             return False
 
         except Exception as e:
-            self.logger.error(f"Unexpected error during connection: {e}")
+            self.logger.error(
+                "Unexpected error connecting to %s:%s: %s",
+                self.host, self.port, e, exc_info=True
+            )
             self._cleanup_socket()
             return False
 
@@ -492,13 +517,24 @@ class IPComClient:
             return True
 
         except socket.timeout:
-            self.logger.error("Authentication timeout - no response received")
+            self.logger.error(
+                "Authentication timeout - no response from %s:%s within %.1fs | "
+                "server may be overloaded or connection unstable",
+                self.host, self.port, self.SOCKET_TIMEOUT
+            )
+            return False
+        except ConnectionResetError as e:
+            self.logger.error(
+                "Authentication failed - connection reset by %s:%s | "
+                "server may have rejected our auth packet",
+                self.host, self.port
+            )
             return False
         except Exception as e:
-            self.logger.error(f"Authentication failed: {e}")
-            if self.debug:
-                import traceback
-                self.logger.debug(traceback.format_exc())
+            self.logger.error(
+                "Authentication failed with %s:%s: %s",
+                self.host, self.port, e, exc_info=True
+            )
             return False
 
     def _build_connect_request(self) -> bytes:
@@ -649,14 +685,43 @@ class IPComClient:
         Receives data, parses frames, and processes them.
         """
         if not self._socket:
+            self.logger.debug("_receive_loop called but socket is None")
             return
 
         # Receive data
-        data = self._socket.recv(self.RECV_BUFFER_SIZE)
+        try:
+            data = self._socket.recv(self.RECV_BUFFER_SIZE)
+        except socket.timeout:
+            # Timeout is normal in non-blocking mode, just return
+            raise
+        except ConnectionResetError as e:
+            self.logger.error(
+                "Connection reset by %s:%s - remote host forcibly closed connection",
+                self.host, self.port
+            )
+            self._cleanup_socket()
+            raise
+        except BrokenPipeError as e:
+            self.logger.error(
+                "Broken pipe to %s:%s - connection was lost",
+                self.host, self.port
+            )
+            self._cleanup_socket()
+            raise
+        except socket.error as e:
+            self.logger.error(
+                "Socket error receiving from %s:%s: %s (errno: %s)",
+                self.host, self.port, e, getattr(e, 'errno', 'N/A')
+            )
+            self._cleanup_socket()
+            raise
 
         if not data:
             # Empty recv() means connection closed
-            self.logger.warning("Connection closed by remote host")
+            self.logger.warning(
+                "Connection closed by remote host %s:%s (recv returned empty)",
+                self.host, self.port
+            )
             self._cleanup_socket()
             return
 

@@ -68,7 +68,27 @@ class IPComCoordinator(DataUpdateCoordinator[dict[str, Any]]):
         # State tracking
         self._device_state: dict[str, dict[str, Any]] = {}  # Keyed by "category.device_key"
         self._restart_count = 0
-        self._max_restart_attempts = 1
+        self._max_restart_attempts = 5  # Allow multiple restart attempts
+        self._restart_delay = 5.0  # Base delay between restarts (seconds)
+        self._max_restart_delay = 300.0  # Max delay (5 minutes)
+        self._consecutive_failures = 0
+
+        # Connection health monitoring
+        self._last_data_received: float = 0.0
+        self._health_check_task: asyncio.Task | None = None
+        self._health_check_interval = 60.0  # Check every 60 seconds
+        self._connection_timeout = 120.0  # Consider dead after 2 minutes of no data
+
+        # Connection statistics for diagnostics
+        self._stats = {
+            "start_time": None,
+            "total_restarts": 0,
+            "total_data_lines": 0,
+            "last_restart_reason": None,
+            "last_restart_time": None,
+            "longest_uptime": 0.0,
+            "current_session_start": None,
+        }
 
         # Command throttling to prevent overwhelming the IPCom server
         self._command_lock = asyncio.Lock()
@@ -80,8 +100,15 @@ class IPComCoordinator(DataUpdateCoordinator[dict[str, Any]]):
 
         This is called during integration setup (async_setup_entry).
         """
-        _LOGGER.info("Starting IPCom CLI agent subprocess")
+        self._stats["start_time"] = time.time()
+        _LOGGER.info(
+            "Starting IPCom coordinator - connecting to %s:%s",
+            self._host, self._port
+        )
         await self._start_subprocess()
+
+        # Start health check task
+        self._health_check_task = asyncio.create_task(self._health_check_loop())
 
     async def _start_subprocess(self) -> None:
         """Start the CLI subprocess and reader task."""
@@ -120,6 +147,11 @@ class IPComCoordinator(DataUpdateCoordinator[dict[str, Any]]):
             self._reader_task = asyncio.create_task(self._read_stdout_loop())
 
             _LOGGER.info("CLI subprocess started successfully (PID: %s)", self._process.pid)
+
+            # Reset failure counter on successful start
+            self._consecutive_failures = 0
+            self._last_data_received = time.time()
+            self._stats["current_session_start"] = time.time()
 
         except FileNotFoundError as err:
             _LOGGER.error("CLI script not found: %s", cli_script)
@@ -210,15 +242,23 @@ class IPComCoordinator(DataUpdateCoordinator[dict[str, Any]]):
 
                 if not line:
                     # EOF - subprocess exited
-                    _LOGGER.warning("CLI subprocess exited unexpectedly")
-                    await self._handle_subprocess_exit()
+                    _LOGGER.warning("CLI subprocess stdout closed (EOF received)")
+                    await self._handle_subprocess_exit("subprocess stdout EOF")
                     break
 
+                # Track data reception for health monitoring
+                self._last_data_received = time.time()
+                self._stats["total_data_lines"] += 1
+
                 # Parse JSON line
+                line_str = line.decode().strip()
                 try:
-                    data = json.loads(line.decode().strip())
+                    data = json.loads(line_str)
                 except json.JSONDecodeError as err:
-                    _LOGGER.warning("Invalid JSON line from CLI: %s", err)
+                    _LOGGER.warning(
+                        "Invalid JSON line from CLI (line #%d): %s - content: %s",
+                        self._stats["total_data_lines"], err, line_str[:200]
+                    )
                     continue
 
                 # Apply changes to state
@@ -228,8 +268,8 @@ class IPComCoordinator(DataUpdateCoordinator[dict[str, Any]]):
             _LOGGER.debug("Reader task cancelled")
             raise
         except Exception as err:
-            _LOGGER.error("Error in stdout reader loop: %s", err)
-            await self._handle_subprocess_exit()
+            _LOGGER.error("Error in stdout reader loop: %s", err, exc_info=True)
+            await self._handle_subprocess_exit(f"reader loop exception: {err}")
 
     def _apply_changes(self, data: dict[str, Any]) -> None:
         """Apply changes from watch output to device state.
@@ -298,35 +338,154 @@ class IPComCoordinator(DataUpdateCoordinator[dict[str, Any]]):
                 "devices": self._device_state,
             })
 
-    async def _handle_subprocess_exit(self) -> None:
-        """Handle unexpected subprocess exit with auto-restart logic."""
+    async def _handle_subprocess_exit(self, reason: str = "unknown") -> None:
+        """Handle unexpected subprocess exit with auto-restart logic.
+
+        Uses exponential backoff with unlimited retries to ensure the
+        integration eventually recovers from temporary network issues.
+
+        Args:
+            reason: Description of why the subprocess exited (for logging)
+        """
         if self._shutdown:
             # Expected shutdown - do nothing
             return
 
-        _LOGGER.error("CLI subprocess exited unexpectedly")
+        # Calculate session uptime before incrementing failure counter
+        session_uptime = 0.0
+        if self._stats["current_session_start"]:
+            session_uptime = time.time() - self._stats["current_session_start"]
+            if session_uptime > self._stats["longest_uptime"]:
+                self._stats["longest_uptime"] = session_uptime
 
-        # Auto-restart once
-        if self._restart_count < self._max_restart_attempts:
-            self._restart_count += 1
-            _LOGGER.warning("Attempting to restart CLI subprocess (attempt %d/%d)",
-                          self._restart_count, self._max_restart_attempts)
+        self._consecutive_failures += 1
+        self._stats["total_restarts"] += 1
+        self._stats["last_restart_reason"] = reason
+        self._stats["last_restart_time"] = time.time()
 
-            try:
-                await self._start_subprocess()
-                _LOGGER.info("CLI subprocess restarted successfully")
-            except Exception as err:
-                _LOGGER.error("Failed to restart CLI subprocess: %s", err)
-                self._mark_unavailable()
-        else:
-            _LOGGER.error("Max restart attempts reached - marking integration unavailable")
-            self._mark_unavailable()
+        # Log detailed diagnostics
+        _LOGGER.error(
+            "CLI subprocess exited - reason: %s | "
+            "failure #%d | session uptime: %.1f min | "
+            "total restarts: %d | longest uptime: %.1f min | "
+            "total data lines received: %d",
+            reason,
+            self._consecutive_failures,
+            session_uptime / 60,
+            self._stats["total_restarts"],
+            self._stats["longest_uptime"] / 60,
+            self._stats["total_data_lines"]
+        )
+
+        # Calculate backoff delay with exponential increase
+        delay = min(
+            self._restart_delay * (2 ** (self._consecutive_failures - 1)),
+            self._max_restart_delay
+        )
+
+        _LOGGER.warning(
+            "Will attempt to restart CLI subprocess in %.0f seconds (attempt %d)",
+            delay, self._consecutive_failures
+        )
+
+        # Mark as temporarily unavailable during reconnection
+        self.last_update_success = False
+        self.async_update_listeners()
+
+        # Wait before retry
+        await asyncio.sleep(delay)
+
+        if self._shutdown:
+            return
+
+        _LOGGER.info("Attempting CLI subprocess restart now...")
+
+        # Attempt restart
+        try:
+            await self._start_subprocess()
+            _LOGGER.info(
+                "CLI subprocess restarted successfully after %d attempts - "
+                "connection restored to %s:%s",
+                self._consecutive_failures, self._host, self._port
+            )
+            # Mark as available again
+            self.last_update_success = True
+            self.async_update_listeners()
+        except Exception as err:
+            _LOGGER.error(
+                "Failed to restart CLI subprocess: %s | "
+                "will retry with increased delay",
+                err
+            )
+            # Schedule another retry by calling this handler again
+            asyncio.create_task(self._handle_subprocess_exit(f"restart failed: {err}"))
 
     def _mark_unavailable(self) -> None:
         """Mark all entities as unavailable."""
         # Set last_update_success to False to mark entities unavailable
         self.last_update_success = False
         self.async_update_listeners()
+
+    async def _health_check_loop(self) -> None:
+        """Periodically check connection health and restart if stale.
+
+        This proactively detects when the connection has gone stale
+        (no data received for a long time) and triggers a restart.
+        """
+        _LOGGER.debug("Starting connection health check loop")
+
+        try:
+            while not self._shutdown:
+                await asyncio.sleep(self._health_check_interval)
+
+                if self._shutdown:
+                    break
+
+                # Check if subprocess is still running
+                if self._process is None:
+                    _LOGGER.warning(
+                        "Health check: subprocess object is None, triggering restart"
+                    )
+                    await self._handle_subprocess_exit("subprocess object is None")
+                    continue
+
+                if self._process.returncode is not None:
+                    _LOGGER.warning(
+                        "Health check: subprocess exited with code %d, triggering restart",
+                        self._process.returncode
+                    )
+                    await self._handle_subprocess_exit(f"subprocess exited with code {self._process.returncode}")
+                    continue
+
+                # Check for data reception timeout
+                if self._last_data_received > 0:
+                    time_since_data = time.time() - self._last_data_received
+                    if time_since_data > self._connection_timeout:
+                        _LOGGER.warning(
+                            "Health check: connection stale - no data received for %.0f seconds "
+                            "(timeout: %.0f seconds) | last data at: %s | restarting subprocess",
+                            time_since_data,
+                            self._connection_timeout,
+                            time.strftime("%H:%M:%S", time.localtime(self._last_data_received))
+                        )
+                        # Force stop the subprocess and trigger restart
+                        await self._stop_subprocess()
+                        await self._handle_subprocess_exit(f"connection timeout ({time_since_data:.0f}s no data)")
+                        continue
+
+                # Only log health check OK at debug level to avoid log spam
+                _LOGGER.debug(
+                    "Health check: OK | PID: %s | last data: %.0fs ago | session uptime: %.1f min",
+                    self._process.pid if self._process else "N/A",
+                    time.time() - self._last_data_received if self._last_data_received > 0 else 0,
+                    (time.time() - self._stats["current_session_start"]) / 60 if self._stats["current_session_start"] else 0
+                )
+
+        except asyncio.CancelledError:
+            _LOGGER.debug("Health check loop cancelled")
+            raise
+        except Exception as err:
+            _LOGGER.error("Error in health check loop: %s", err)
 
     async def _stop_subprocess(self) -> None:
         """Stop the CLI subprocess gracefully."""
@@ -363,6 +522,15 @@ class IPComCoordinator(DataUpdateCoordinator[dict[str, Any]]):
         """
         _LOGGER.info("Shutting down IPCom coordinator")
         self._shutdown = True
+
+        # Cancel health check task
+        if self._health_check_task and not self._health_check_task.done():
+            self._health_check_task.cancel()
+            try:
+                await self._health_check_task
+            except asyncio.CancelledError:
+                pass
+
         await self._stop_subprocess()
 
     async def async_execute_command(
