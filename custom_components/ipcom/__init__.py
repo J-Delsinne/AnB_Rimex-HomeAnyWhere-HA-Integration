@@ -10,6 +10,8 @@ from .const import (
     CONF_CLI_PATH,
     CONF_HOST,
     CONF_PORT,
+    CONF_USERNAME,
+    CONF_PASSWORD,
     DOMAIN,
     PLATFORMS,
 )
@@ -24,6 +26,8 @@ async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
     cli_path = entry.data[CONF_CLI_PATH]
     host = entry.data[CONF_HOST]
     port = entry.data[CONF_PORT]
+    username = entry.data.get(CONF_USERNAME, "")
+    password = entry.data.get(CONF_PASSWORD, "")
 
     # Create coordinator
     coordinator = IPComCoordinator(
@@ -31,6 +35,8 @@ async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
         cli_path=cli_path,
         host=host,
         port=port,
+        username=username,
+        password=password,
     )
 
     # Start persistent CLI subprocess

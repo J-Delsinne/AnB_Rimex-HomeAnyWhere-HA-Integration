@@ -29,10 +29,8 @@ MODULE_6_QUICK_REFERENCE.md    # EXO DIM (Module 6) reference
 COVER_DEPLOYMENT.md            # Cover deployment guide
 ```
 
-### Tools & Reference (5 files)
+### Tools & Reference (3 files)
 ```
-test_control.py         # Protocol testing
-debug_snapshot.py       # Snapshot debugging
 copy_to_ha.sh           # Linux deployment script
 copy_to_ha.bat          # Windows deployment script
 official_handshake.pcap # Reference capture
@@ -105,13 +103,13 @@ Settings → System → Restart
 
 ### 1. CLI Status Test
 ```bash
-python ipcom_cli.py status --host megane-david.dyndns.info --port 5000 --json
+python ipcom_cli.py status --host YOUR_HOST --port 5000 --username YOUR_USER --password YOUR_PASS --json
 ```
 **Expected**: Valid JSON with all 25 devices (17 lights, 8 shutter relays)
 
 ### 2. Dimmer Control Test
 ```bash
-python ipcom_cli.py dim salon 50 --host megane-david.dyndns.info --port 5000
+python ipcom_cli.py dim salon 50 --host YOUR_HOST --port 5000 --username YOUR_USER --password YOUR_PASS
 ```
 **Expected**: `✔ SALON dimmed to 50% (Module 6, Output 2)`
 
@@ -127,9 +125,11 @@ After deployment:
 2. Settings → Devices & Services → Add Integration
 3. Search for "IPCom Home Anywhere Blue"
 4. Configure with:
-   - Host: `megane-david.dyndns.info`
+   - CLI Path: `ipcom` (or `/config/ipcom`)
+   - Host: Your IPCom hostname or IP address
    - Port: `5000`
-   - CLI Path: `/config/ipcom_cli.py`
+   - Username: Your IPCom username
+   - Password: Your IPCom password
 5. Verify:
    - ✅ 17 light entities appear
    - ✅ 4 cover entities appear
@@ -165,7 +165,7 @@ Stable, documented interface:
 ### CLI not working
 ```bash
 # Test connection
-python ipcom_cli.py status --host megane-david.dyndns.info --port 5000
+python ipcom_cli.py status --host YOUR_HOST --port 5000 --username YOUR_USER --password YOUR_PASS
 
 # Check devices.yaml exists
 ls -la devices.yaml

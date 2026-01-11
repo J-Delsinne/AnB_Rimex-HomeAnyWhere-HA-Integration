@@ -29,6 +29,8 @@ import homeassistant.helpers.config_validation as cv
 
 from .const import (
     CONF_CLI_PATH,
+    CONF_USERNAME,
+    CONF_PASSWORD,
     DEFAULT_HOST,
     DEFAULT_PORT,
     DOMAIN,
@@ -79,7 +81,8 @@ def validate_cli_path(cli_path: str) -> str:
 
 
 async def validate_cli_connection(
-    hass: HomeAssistant, cli_path: str, host: str, port: int
+    hass: HomeAssistant, cli_path: str, host: str, port: int,
+    username: str, password: str
 ) -> dict[str, Any]:
     """Validate that CLI can connect to IPCom and return valid JSON.
 
@@ -91,6 +94,8 @@ async def validate_cli_connection(
         cli_path: Absolute path to CLI directory
         host: IPCom host
         port: IPCom port
+        username: IPCom username
+        password: IPCom password
 
     Returns:
         dict with:
@@ -110,6 +115,10 @@ async def validate_cli_connection(
         host,
         "--port",
         str(port),
+        "--username",
+        username,
+        "--password",
+        password,
     ]
 
     _LOGGER.debug("Validating CLI connection: %s", " ".join(cmd))
@@ -211,6 +220,8 @@ class IPComConfigFlow(config_entries.ConfigFlow, domain=DOMAIN):
                     cli_path,
                     user_input[CONF_HOST],
                     user_input[CONF_PORT],
+                    user_input[CONF_USERNAME],
+                    user_input[CONF_PASSWORD],
                 )
 
                 # Check for existing entries with same host
@@ -231,6 +242,8 @@ class IPComConfigFlow(config_entries.ConfigFlow, domain=DOMAIN):
                         CONF_CLI_PATH: cli_path,  # Store absolute path
                         CONF_HOST: user_input[CONF_HOST],
                         CONF_PORT: user_input[CONF_PORT],
+                        CONF_USERNAME: user_input[CONF_USERNAME],
+                        CONF_PASSWORD: user_input[CONF_PASSWORD],
                     },
                 )
 
@@ -263,12 +276,18 @@ class IPComConfigFlow(config_entries.ConfigFlow, domain=DOMAIN):
                 ): cv.string,
                 vol.Required(
                     CONF_HOST,
-                    default=DEFAULT_HOST,
+                    description={"suggested_value": "your-ipcom-host.example.com"},
                 ): cv.string,
                 vol.Required(
                     CONF_PORT,
                     default=DEFAULT_PORT,
                 ): cv.port,
+                vol.Required(
+                    CONF_USERNAME,
+                ): cv.string,
+                vol.Required(
+                    CONF_PASSWORD,
+                ): cv.string,
             }
         )
 
@@ -310,6 +329,8 @@ class IPComConfigFlow(config_entries.ConfigFlow, domain=DOMAIN):
                 cli_path,
                 import_data[CONF_HOST],
                 import_data[CONF_PORT],
+                import_data.get(CONF_USERNAME, ""),
+                import_data.get(CONF_PASSWORD, ""),
             )
             _LOGGER.info(
                 "YAML import validation successful: %d devices found",
@@ -330,5 +351,7 @@ class IPComConfigFlow(config_entries.ConfigFlow, domain=DOMAIN):
                 CONF_CLI_PATH: cli_path,
                 CONF_HOST: import_data[CONF_HOST],
                 CONF_PORT: import_data[CONF_PORT],
+                CONF_USERNAME: import_data.get(CONF_USERNAME, ""),
+                CONF_PASSWORD: import_data.get(CONF_PASSWORD, ""),
             },
         )

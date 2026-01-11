@@ -30,6 +30,7 @@ import argparse
 import json
 import logging
 import socket
+import os
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import Dict, Optional, List
@@ -644,7 +645,8 @@ def print_status_json(client: "IPComClient", mapper: DeviceMapper, host: str):
     print(json.dumps(output, ensure_ascii=False, indent=2))
 
 
-def watch_mode_json(client: "IPComClient", mapper: DeviceMapper, host: str, port: int):
+def watch_mode_json(client: "IPComClient", mapper: DeviceMapper, host: str, port: int,
+                    username: str, password: str):
     """Live monitoring in JSON format (newline-delimited JSON).
 
     Features robust connection handling with automatic reconnection
@@ -666,11 +668,13 @@ def watch_mode_json(client: "IPComClient", mapper: DeviceMapper, host: str, port
         "total_changes": 0,
         "reconnect_count": 0,
         "session_start": time.time(),
+        "errors_by_type": {},  # Track error types for diagnostics
     }
 
     logger.info(
-        "Watch mode started - connected to %s:%s | timeout: %ds",
-        host, port, CONNECTION_TIMEOUT
+        "WATCH_START | connected to %s:%s | timeout: %ds | "
+        "reconnect base delay: %ds | PID: %d",
+        host, port, CONNECTION_TIMEOUT, RECONNECT_DELAY, os.getpid() if 'os' in dir() else -1
     )
 
     # Create reverse lookup: (module, output) -> device_key
@@ -737,14 +741,18 @@ def watch_mode_json(client: "IPComClient", mapper: DeviceMapper, host: str, port
             time_since_data = time.time() - last_data_time
             if time_since_data > CONNECTION_TIMEOUT:
                 session_uptime = time.time() - stats["session_start"]
+                error_type = "TIMEOUT_NO_DATA"
+                stats["errors_by_type"][error_type] = stats["errors_by_type"].get(error_type, 0) + 1
                 logger.warning(
-                    "Connection timeout detected | no data for %.0fs (limit: %ds) | "
-                    "session uptime: %.1f min | snapshots this session: %d | "
-                    "total changes: %d",
-                    time_since_data, CONNECTION_TIMEOUT,
+                    "%s | no data for %.0fs (limit: %ds) | "
+                    "session uptime: %.1f min | snapshots: %d | changes: %d | "
+                    "host: %s:%s | reconnects so far: %d",
+                    error_type, time_since_data, CONNECTION_TIMEOUT,
                     session_uptime / 60,
                     stats["total_snapshots"],
-                    stats["total_changes"]
+                    stats["total_changes"],
+                    host, port,
+                    stats["reconnect_count"]
                 )
                 raise ConnectionError(f"Connection timeout - no data for {time_since_data:.0f}s")
 
@@ -765,13 +773,20 @@ def watch_mode_json(client: "IPComClient", mapper: DeviceMapper, host: str, port
             stats["reconnect_count"] += 1
             delay = min(RECONNECT_DELAY * reconnect_attempts, 60)
 
+            # Track error type for diagnostics
+            error_type = type(e).__name__
+            stats["errors_by_type"][error_type] = stats["errors_by_type"].get(error_type, 0) + 1
+
             session_uptime = time.time() - stats["session_start"]
             logger.warning(
-                "Connection lost: %s | "
-                "reconnect attempt #%d (total: %d) | delay: %ds | "
-                "session was up for %.1f min | snapshots received: %d",
-                str(e), reconnect_attempts, stats["reconnect_count"],
-                delay, session_uptime / 60, stats["total_snapshots"]
+                "CONN_LOST | error: %s (%s) | "
+                "attempt #%d (total: %d) | delay: %ds | "
+                "session uptime: %.1f min | snapshots: %d | "
+                "error counts: %s",
+                error_type, str(e),
+                reconnect_attempts, stats["reconnect_count"],
+                delay, session_uptime / 60, stats["total_snapshots"],
+                json.dumps(stats["errors_by_type"])
             )
 
             # Clean up old connection
@@ -789,7 +804,7 @@ def watch_mode_json(client: "IPComClient", mapper: DeviceMapper, host: str, port
                 # Re-import to get fresh client
                 from ipcom_tcp_client import IPComClient
 
-                client = IPComClient(host, port)
+                client = IPComClient(host, port, username=username, password=password)
 
                 if not client.connect():
                     logger.error(
@@ -823,9 +838,11 @@ def watch_mode_json(client: "IPComClient", mapper: DeviceMapper, host: str, port
                 stats["session_start"] = time.time()  # Reset session timer
 
                 logger.info(
-                    "Reconnected successfully to %s:%s after %d attempts | "
-                    "total reconnects: %d",
-                    host, port, reconnect_attempts, stats["reconnect_count"]
+                    "RECONNECT_OK | connected to %s:%s | "
+                    "attempts this cycle: %d | total reconnects: %d | "
+                    "error history: %s",
+                    host, port, reconnect_attempts, stats["reconnect_count"],
+                    json.dumps(stats["errors_by_type"])
                 )
 
             except Exception as reconnect_err:
@@ -871,8 +888,10 @@ Device names are defined in devices.yaml
                         help='Command to execute')
     parser.add_argument('device', nargs='?', help='Device name (from devices.yaml)')
     parser.add_argument('value', nargs='?', type=int, help='Dimmer value (0-100) for dim command')
-    parser.add_argument('--host', default='megane-david.dyndns.info', help='IPCom server host')
+    parser.add_argument('--host', required=True, help='IPCom server host')
     parser.add_argument('--port', type=int, default=5000, help='IPCom server port')
+    parser.add_argument('--username', required=True, help='IPCom authentication username')
+    parser.add_argument('--password', required=True, help='IPCom authentication password')
     parser.add_argument('--json', action='store_true', help='Output in JSON format (for status/watch)')
     parser.add_argument('--debug', action='store_true', help='Enable debug output')
 
@@ -909,7 +928,13 @@ Device names are defined in devices.yaml
     if not args.json:
         print(f"Connecting to {args.host}:{args.port}...")
 
-    client = IPComClient(args.host, args.port, debug=args.debug)
+    client = IPComClient(
+        host=args.host,
+        port=args.port,
+        username=args.username,
+        password=args.password,
+        debug=args.debug
+    )
 
     try:
         # Connect
@@ -963,7 +988,8 @@ Device names are defined in devices.yaml
 
         elif args.command == 'watch':
             if args.json:
-                watch_mode_json(client, mapper, args.host, args.port)
+                watch_mode_json(client, mapper, args.host, args.port,
+                               args.username, args.password)
             else:
                 watch_mode(client, mapper)
 

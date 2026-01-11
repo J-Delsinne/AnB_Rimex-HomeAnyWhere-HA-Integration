@@ -7,7 +7,16 @@
         "data": {
           "cli_path": "CLI Directory Path",
           "host": "Host",
-          "port": "Port"
+          "port": "Port",
+          "username": "Username",
+          "password": "Password"
+        },
+        "data_description": {
+          "cli_path": "Path to the ipcom CLI directory (e.g., 'ipcom' or '/config/ipcom')",
+          "host": "IPCom server hostname or IP address",
+          "port": "IPCom server port (default: 5000)",
+          "username": "Your IPCom authentication username",
+          "password": "Your IPCom authentication password"
         }
       }
     },
@@ -16,7 +25,8 @@
       "cli_not_readable": "CLI script is not readable",
       "connection_timeout": "Connection to IPCom timed out - check host and port",
       "invalid_json": "CLI returned invalid JSON - check CLI installation",
-      "cli_failed": "CLI command failed - check logs for details",
+      "cli_failed": "CLI command failed - check credentials and connection",
+      "auth_failed": "Authentication failed - check username and password",
       "unknown": "Unknown error occurred"
     },
     "abort": {

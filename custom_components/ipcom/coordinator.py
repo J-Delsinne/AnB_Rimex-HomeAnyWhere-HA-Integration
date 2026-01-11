@@ -39,6 +39,8 @@ class IPComCoordinator(DataUpdateCoordinator[dict[str, Any]]):
         cli_path: str,
         host: str,
         port: int,
+        username: str,
+        password: str,
     ) -> None:
         """Initialize coordinator.
 
@@ -47,6 +49,8 @@ class IPComCoordinator(DataUpdateCoordinator[dict[str, Any]]):
             cli_path: Absolute path to CLI directory (containing ipcom_cli.py)
             host: IPCom host
             port: IPCom port
+            username: IPCom authentication username
+            password: IPCom authentication password
         """
         # Initialize DataUpdateCoordinator WITHOUT update_interval (no polling)
         super().__init__(
@@ -59,6 +63,8 @@ class IPComCoordinator(DataUpdateCoordinator[dict[str, Any]]):
         self._cli_path = cli_path
         self._host = host
         self._port = port
+        self._username = username
+        self._password = password
 
         # Subprocess management
         self._process: asyncio.subprocess.Process | None = None
@@ -128,6 +134,10 @@ class IPComCoordinator(DataUpdateCoordinator[dict[str, Any]]):
                 self._host,
                 "--port",
                 str(self._port),
+                "--username",
+                self._username,
+                "--password",
+                self._password,
             ]
 
             _LOGGER.debug("Starting CLI subprocess: %s", " ".join(cmd))
@@ -146,7 +156,15 @@ class IPComCoordinator(DataUpdateCoordinator[dict[str, Any]]):
             # Start reader task
             self._reader_task = asyncio.create_task(self._read_stdout_loop())
 
-            _LOGGER.info("CLI subprocess started successfully (PID: %s)", self._process.pid)
+            _LOGGER.info(
+                "CLI_START | PID: %s | host: %s:%s | cli_path: %s | "
+                "health_check: %ds | timeout: %ds",
+                self._process.pid,
+                self._host, self._port,
+                self._cli_path,
+                int(self._health_check_interval),
+                int(self._connection_timeout)
+            )
 
             # Reset failure counter on successful start
             self._consecutive_failures = 0
@@ -176,9 +194,13 @@ class IPComCoordinator(DataUpdateCoordinator[dict[str, Any]]):
                 self._host,
                 "--port",
                 str(self._port),
+                "--username",
+                self._username,
+                "--password",
+                self._password,
             ]
 
-            _LOGGER.debug("Fetching initial state: %s", " ".join(cmd))
+            _LOGGER.debug("Fetching initial state: %s", " ".join(cmd[:8]) + " ...")
 
             process = await asyncio.create_subprocess_exec(
                 *cmd,
@@ -242,7 +264,14 @@ class IPComCoordinator(DataUpdateCoordinator[dict[str, Any]]):
 
                 if not line:
                     # EOF - subprocess exited
-                    _LOGGER.warning("CLI subprocess stdout closed (EOF received)")
+                    _LOGGER.warning(
+                        "CLI_EOF | subprocess stdout closed | "
+                        "data lines received: %d | session uptime: %.1f min | "
+                        "host: %s:%s",
+                        self._stats["total_data_lines"],
+                        (time.time() - self._stats["current_session_start"]) / 60 if self._stats["current_session_start"] else 0,
+                        self._host, self._port
+                    )
                     await self._handle_subprocess_exit("subprocess stdout EOF")
                     break
 
@@ -365,16 +394,17 @@ class IPComCoordinator(DataUpdateCoordinator[dict[str, Any]]):
 
         # Log detailed diagnostics
         _LOGGER.error(
-            "CLI subprocess exited - reason: %s | "
-            "failure #%d | session uptime: %.1f min | "
-            "total restarts: %d | longest uptime: %.1f min | "
-            "total data lines received: %d",
+            "CLI_EXIT | reason: %s | "
+            "failure #%d | session: %.1f min | "
+            "total restarts: %d | best uptime: %.1f min | "
+            "data lines: %d | host: %s:%s",
             reason,
             self._consecutive_failures,
             session_uptime / 60,
             self._stats["total_restarts"],
             self._stats["longest_uptime"] / 60,
-            self._stats["total_data_lines"]
+            self._stats["total_data_lines"],
+            self._host, self._port
         )
 
         # Calculate backoff delay with exponential increase
@@ -384,8 +414,11 @@ class IPComCoordinator(DataUpdateCoordinator[dict[str, Any]]):
         )
 
         _LOGGER.warning(
-            "Will attempt to restart CLI subprocess in %.0f seconds (attempt %d)",
-            delay, self._consecutive_failures
+            "CLI_RESTART_SCHEDULED | delay: %.0fs | attempt: %d | "
+            "backoff formula: %.0f * 2^%d (max: %.0f) | host: %s:%s",
+            delay, self._consecutive_failures,
+            self._restart_delay, self._consecutive_failures - 1, self._max_restart_delay,
+            self._host, self._port
         )
 
         # Mark as temporarily unavailable during reconnection
@@ -404,18 +437,21 @@ class IPComCoordinator(DataUpdateCoordinator[dict[str, Any]]):
         try:
             await self._start_subprocess()
             _LOGGER.info(
-                "CLI subprocess restarted successfully after %d attempts - "
-                "connection restored to %s:%s",
-                self._consecutive_failures, self._host, self._port
+                "CLI_RESTART_OK | attempts: %d | host: %s:%s | "
+                "total restarts: %d | integration restored",
+                self._consecutive_failures, self._host, self._port,
+                self._stats["total_restarts"]
             )
             # Mark as available again
             self.last_update_success = True
             self.async_update_listeners()
         except Exception as err:
             _LOGGER.error(
-                "Failed to restart CLI subprocess: %s | "
-                "will retry with increased delay",
-                err
+                "CLI_RESTART_FAILED | error: %s | attempts: %d | "
+                "next delay: %.0fs | host: %s:%s",
+                err, self._consecutive_failures,
+                min(self._restart_delay * (2 ** self._consecutive_failures), self._max_restart_delay),
+                self._host, self._port
             )
             # Schedule another retry by calling this handler again
             asyncio.create_task(self._handle_subprocess_exit(f"restart failed: {err}"))
@@ -462,11 +498,14 @@ class IPComCoordinator(DataUpdateCoordinator[dict[str, Any]]):
                     time_since_data = time.time() - self._last_data_received
                     if time_since_data > self._connection_timeout:
                         _LOGGER.warning(
-                            "Health check: connection stale - no data received for %.0f seconds "
-                            "(timeout: %.0f seconds) | last data at: %s | restarting subprocess",
+                            "HEALTH_TIMEOUT | no data for %.0fs (limit: %.0fs) | "
+                            "last data: %s | host: %s:%s | "
+                            "data lines: %d | triggering restart",
                             time_since_data,
                             self._connection_timeout,
-                            time.strftime("%H:%M:%S", time.localtime(self._last_data_received))
+                            time.strftime("%H:%M:%S", time.localtime(self._last_data_received)),
+                            self._host, self._port,
+                            self._stats["total_data_lines"]
                         )
                         # Force stop the subprocess and trigger restart
                         await self._stop_subprocess()
@@ -475,10 +514,13 @@ class IPComCoordinator(DataUpdateCoordinator[dict[str, Any]]):
 
                 # Only log health check OK at debug level to avoid log spam
                 _LOGGER.debug(
-                    "Health check: OK | PID: %s | last data: %.0fs ago | session uptime: %.1f min",
+                    "HEALTH_OK | PID: %s | data age: %.0fs | "
+                    "session: %.1f min | lines: %d | restarts: %d",
                     self._process.pid if self._process else "N/A",
                     time.time() - self._last_data_received if self._last_data_received > 0 else 0,
-                    (time.time() - self._stats["current_session_start"]) / 60 if self._stats["current_session_start"] else 0
+                    (time.time() - self._stats["current_session_start"]) / 60 if self._stats["current_session_start"] else 0,
+                    self._stats["total_data_lines"],
+                    self._stats["total_restarts"]
                 )
 
         except asyncio.CancelledError:
@@ -588,9 +630,13 @@ class IPComCoordinator(DataUpdateCoordinator[dict[str, Any]]):
                     self._host,
                     "--port",
                     str(self._port),
+                    "--username",
+                    self._username,
+                    "--password",
+                    self._password,
                 ])
 
-                _LOGGER.debug("Executing command: %s", " ".join(cmd))
+                _LOGGER.debug("Executing command: %s %s %s ...", cmd[0], cmd[1], cmd[2])
 
                 # Execute subprocess
                 process = await asyncio.create_subprocess_exec(

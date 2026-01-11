@@ -51,15 +51,15 @@ Python client and Home Assistant integration for Home Anywhere Blue home automat
 cd ipcom
 
 # Check device status
-python ipcom_cli.py status --host YOUR_HOST --port 5000
+python ipcom_cli.py status --host YOUR_HOST --port 5000 --username YOUR_USER --password YOUR_PASS
 
 # Control devices
-python ipcom_cli.py on keuken --host YOUR_HOST --port 5000
-python ipcom_cli.py off keuken --host YOUR_HOST --port 5000
-python ipcom_cli.py dim salon 50 --host YOUR_HOST --port 5000
+python ipcom_cli.py on keuken --host YOUR_HOST --port 5000 --username YOUR_USER --password YOUR_PASS
+python ipcom_cli.py off keuken --host YOUR_HOST --port 5000 --username YOUR_USER --password YOUR_PASS
+python ipcom_cli.py dim salon 50 --host YOUR_HOST --port 5000 --username YOUR_USER --password YOUR_PASS
 
 # Watch live updates (JSON)
-python ipcom_cli.py watch --host YOUR_HOST --port 5000 --json
+python ipcom_cli.py watch --host YOUR_HOST --port 5000 --username YOUR_USER --password YOUR_PASS --json
 ```
 
 ### 2. Home Assistant Installation
@@ -88,9 +88,11 @@ Settings → System → Restart
 1. Settings → Devices & Services → Add Integration
 2. Search for "IPCom Home Anywhere Blue"
 3. Configure:
-   - Host: Your IPCom host (e.g., `megane-david.dyndns.info`)
+   - CLI Path: `ipcom` (or full path `/config/ipcom`)
+   - Host: Your IPCom hostname or IP address
    - Port: `5000`
-   - CLI Path: `/config/ipcom/ipcom_cli.py`
+   - Username: Your IPCom username
+   - Password: Your IPCom password
 
 ---
 
@@ -113,13 +115,13 @@ Module 6 dimmers use a **0-100 value range** (not 0-255 like regular modules).
 
 ```bash
 # Turn on to 100%
-python ipcom_cli.py on eetkamer --host YOUR_HOST --port 5000
+python ipcom_cli.py on eetkamer --host YOUR_HOST --port 5000 --username YOUR_USER --password YOUR_PASS
 
 # Dim to 50%
-python ipcom_cli.py dim eetkamer 50 --host YOUR_HOST --port 5000
+python ipcom_cli.py dim eetkamer 50 --host YOUR_HOST --port 5000 --username YOUR_USER --password YOUR_PASS
 
 # Turn off
-python ipcom_cli.py off eetkamer --host YOUR_HOST --port 5000
+python ipcom_cli.py off eetkamer --host YOUR_HOST --port 5000 --username YOUR_USER --password YOUR_PASS
 ```
 
 See [MODULE_6_QUICK_REFERENCE.md](MODULE_6_QUICK_REFERENCE.md) for details.
@@ -155,14 +157,14 @@ See [COVER_DEPLOYMENT.md](COVER_DEPLOYMENT.md) for details.
 The CLI provides a **stable JSON interface** for Home Assistant:
 
 ```bash
-python ipcom_cli.py status --json --host YOUR_HOST --port 5000
+python ipcom_cli.py status --json --host YOUR_HOST --port 5000 --username YOUR_USER --password YOUR_PASS
 ```
 
 **Output Structure**:
 ```json
 {
   "timestamp": "2025-12-28T14:00:00+00:00",
-  "host": "megane-david.dyndns.info",
+  "host": "your-ipcom-host.example.com",
   "devices": [
     {
       "device_key": "salon",
@@ -247,7 +249,12 @@ python ipcom_cli.py status --json --host YOUR_HOST --port 5000
 from ipcom.ipcom_tcp_client import IPComClient
 
 # Connect
-client = IPComClient("megane-david.dyndns.info", 5000)
+client = IPComClient(
+    host="your-ipcom-host.example.com",
+    port=5000,
+    username="your_username",
+    password="your_password"
+)
 client.connect()
 client.authenticate()
 client.start_snapshot_polling()
@@ -310,13 +317,13 @@ shutters:
 ```bash
 # Test CLI
 cd ipcom
-python ipcom_cli.py status --host YOUR_HOST --port 5000
+python ipcom_cli.py status --host YOUR_HOST --port 5000 --username YOUR_USER --password YOUR_PASS
 
 # Test control
-python ipcom_cli.py on keuken --host YOUR_HOST --port 5000
+python ipcom_cli.py on keuken --host YOUR_HOST --port 5000 --username YOUR_USER --password YOUR_PASS
 
 # Test dimming (Module 6)
-python ipcom_cli.py dim salon 50 --host YOUR_HOST --port 5000
+python ipcom_cli.py dim salon 50 --host YOUR_HOST --port 5000 --username YOUR_USER --password YOUR_PASS
 ```
 
 ---
@@ -329,7 +336,7 @@ python ipcom_cli.py dim salon 50 --host YOUR_HOST --port 5000
 python3 --version
 
 # Test connection
-python ipcom/ipcom_cli.py status --host YOUR_HOST --port 5000
+python ipcom/ipcom_cli.py status --host YOUR_HOST --port 5000 --username YOUR_USER --password YOUR_PASS
 
 # Check devices.yaml exists
 ls -la ipcom/devices.yaml
@@ -344,7 +351,7 @@ tail -f /config/home-assistant.log | grep ipcom
 cat /config/custom_components/ipcom/const.py | grep CLI_SCRIPT
 
 # Test CLI manually
-python3 /config/ipcom/ipcom_cli.py status --json --host YOUR_HOST --port 5000
+python3 /config/ipcom/ipcom_cli.py status --json --host YOUR_HOST --port 5000 --username YOUR_USER --password YOUR_PASS
 ```
 
 ### Covers not appearing

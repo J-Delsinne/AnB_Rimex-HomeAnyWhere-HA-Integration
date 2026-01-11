@@ -250,13 +250,16 @@ class IPComClient:
     STATUS_POLL_INTERVAL = 0.350  # seconds (350ms) - continuous state updates
     COMMAND_QUEUE_INTERVAL = 0.250  # seconds (250ms) - process queued commands
 
-    def __init__(self, host: str, port: int = DEFAULT_PORT, debug: bool = False):
+    def __init__(self, host: str, port: int = DEFAULT_PORT,
+                 username: str = "", password: str = "", debug: bool = False):
         """
         Initialize IPCom client.
 
         Args:
-            host: IPCom device IP address (e.g., "192.168.0.251")
+            host: IPCom device hostname or IP address
             port: TCP port (default: 5000)
+            username: IPCom authentication username
+            password: IPCom authentication password
             debug: Enable debug logging
         """
         self.host = host
@@ -284,11 +287,11 @@ class IPComClient:
         # Format: {module_number: [val1, val2, ..., val8]}
         self._pending_writes: dict[int, list[int]] = {}
 
-        # Encryption and authentication (from AUTH_HANDSHAKE_SPEC.md)
+        # Encryption and authentication
         self._encryption = IPComEncryption()
         self._authenticated = False
-        self._username = "ppssecurity"  # From SOAP CheckSiteVersion
-        self._password = "667166mm"     # From SOAP CheckSiteVersion
+        self._username = username
+        self._password = password
         self._bus_number = 1
 
         # Callbacks
@@ -319,7 +322,10 @@ class IPComClient:
             return True
 
         try:
-            self.logger.info(f"Connecting to {self.host}:{self.port}...")
+            self.logger.info(
+                "Initiating TCP connection to %s:%s (timeout: %.1fs)",
+                self.host, self.port, self.SOCKET_TIMEOUT
+            )
 
             # Create socket
             self._socket = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
@@ -329,7 +335,11 @@ class IPComClient:
             self._socket.connect((self.host, self.port))
             self._connected = True
 
-            self.logger.info("Connection established")
+            self.logger.info(
+                "TCP connection established to %s:%s | local endpoint: %s",
+                self.host, self.port,
+                self._socket.getsockname() if self._socket else "N/A"
+            )
 
             # Trigger callback
             if self._on_connect:
@@ -443,24 +453,36 @@ class IPComClient:
             self.logger.warning("Already authenticated")
             return True
 
-        # HARDCODED authentication packet from official app
-        # This packet is ALWAYS the same and works universally
-        # See CRITICAL_FINDING_HARDCODED_PACKET.md for details
-        OFFICIAL_AUTH_PACKET = bytes.fromhex(
-            '0da7e127586fcc633d89411daa195b064f59d9594f22daf3192ce7b0cbc67564'
-            '628a101efca55fa706b48e945c731d7705daad8ec0aeb27e'
-        )
+        # Validate credentials are provided
+        if not self._username or not self._password:
+            self.logger.error(
+                "Authentication failed: credentials missing | "
+                "username provided: %s | password provided: %s",
+                bool(self._username), bool(self._password)
+            )
+            return False
 
         try:
-            self.logger.info("Authenticating with hardcoded official app packet...")
+            # Build authentication packet dynamically from credentials
+            self.logger.debug(
+                "Building ConnectRequest packet | username: %s (len: %d) | bus: %d",
+                self._username, len(self._username), self._bus_number
+            )
+            auth_payload = self._build_connect_request()
+            auth_packet = self._encryption.encrypt(auth_payload)
+
+            self.logger.info(
+                "Sending authentication packet to %s:%s | username: %s | packet size: %d bytes",
+                self.host, self.port, self._username, len(auth_packet)
+            )
 
             if self.debug:
-                hex_preview = ' '.join(f'{b:02x}' for b in OFFICIAL_AUTH_PACKET[:32])
-                self.logger.debug(f"TX (RAW): {hex_preview}... ({len(OFFICIAL_AUTH_PACKET)} bytes total)")
+                hex_preview = ' '.join(f'{b:02x}' for b in auth_packet[:32])
+                self.logger.debug(f"TX (RAW): {hex_preview}... ({len(auth_packet)} bytes total)")
 
-            # Send hardcoded authentication packet
-            self._socket.sendall(OFFICIAL_AUTH_PACKET)
-            self.logger.debug("Sent authentication packet (56 bytes)")
+            # Send encrypted authentication packet
+            self._socket.sendall(auth_packet)
+            self.logger.debug("Sent authentication packet (%d bytes)", len(auth_packet))
 
             # Receive ConnectResponse (135 bytes RAW encrypted with public key)
             self.logger.debug("Waiting for ConnectResponse (135 bytes)...")
@@ -475,14 +497,21 @@ class IPComClient:
                     response += chunk
 
             if len(response) != 135:
-                self.logger.error(f"ConnectResponse: Expected 135 bytes, got {len(response)}")
-                if self.debug and len(response) > 0:
+                self.logger.error(
+                    "ConnectResponse size mismatch | expected: 135 bytes | received: %d bytes | "
+                    "this may indicate auth failure or protocol mismatch",
+                    len(response)
+                )
+                if len(response) > 0:
                     hex_dump = ' '.join(f'{b:02x}' for b in response[:64])
-                    self.logger.debug(f"RX: {hex_dump}...")
+                    self.logger.error("Response data (first 64 bytes): %s", hex_dump)
 
                     # Check for 7e e3 error
                     if len(response) == 2 and response == b'\x7e\xe3':
-                        self.logger.error("Received 7e e3 error response!")
+                        self.logger.error(
+                            "Received 7e e3 error response - server rejected authentication | "
+                            "possible causes: invalid credentials, account locked, protocol error"
+                        )
                 return False
 
             if self.debug:
@@ -498,7 +527,11 @@ class IPComClient:
                 self.logger.debug(f"Decrypted: {dec_preview}... (Command type: 0x{cmd_type:02x})")
 
             if cmd_type != 0x01:
-                self.logger.error(f"ConnectResponse: Expected type 0x01, got 0x{cmd_type:02x}")
+                self.logger.error(
+                    "ConnectResponse command type mismatch | expected: 0x01 | received: 0x%02x | "
+                    "authentication may have been rejected",
+                    cmd_type
+                )
                 return False
 
             # Extract public key from bytes[7:135]
@@ -513,26 +546,44 @@ class IPComClient:
             self.logger.info("Switched to dual-key encryption mode (PRIVATE_KEY + PUBLIC_KEY)")
 
             self._authenticated = True
-            self.logger.info("Authentication successful!")
+            self.logger.info(
+                "Authentication successful with %s:%s | username: %s | "
+                "encryption mode: dual-key (PRIVATE_KEY + PUBLIC_KEY)",
+                self.host, self.port, self._username
+            )
             return True
 
         except socket.timeout:
             self.logger.error(
-                "Authentication timeout - no response from %s:%s within %.1fs | "
-                "server may be overloaded or connection unstable",
+                "AUTH_TIMEOUT | no response from %s:%s within %.1fs | "
+                "possible causes: server overloaded, firewall blocking, network latency",
                 self.host, self.port, self.SOCKET_TIMEOUT
             )
             return False
         except ConnectionResetError as e:
             self.logger.error(
-                "Authentication failed - connection reset by %s:%s | "
-                "server may have rejected our auth packet",
+                "AUTH_RESET | connection reset by %s:%s | "
+                "possible causes: invalid credentials, account disabled, server crash",
                 self.host, self.port
+            )
+            return False
+        except BrokenPipeError as e:
+            self.logger.error(
+                "AUTH_BROKEN_PIPE | connection broken to %s:%s | "
+                "server closed connection before auth completed",
+                self.host, self.port
+            )
+            return False
+        except OSError as e:
+            self.logger.error(
+                "AUTH_OS_ERROR | OS-level error with %s:%s: %s (errno: %s) | "
+                "possible causes: network interface down, routing issues",
+                self.host, self.port, e, getattr(e, 'errno', 'N/A')
             )
             return False
         except Exception as e:
             self.logger.error(
-                "Authentication failed with %s:%s: %s",
+                "AUTH_UNEXPECTED | unexpected error with %s:%s: %s",
                 self.host, self.port, e, exc_info=True
             )
             return False
@@ -546,8 +597,8 @@ class IPComClient:
         Format (56 bytes total):
         - ID: 1
         - Version: 2
-        - Username: "USER:ppssecurity" (padded to 26 bytes)
-        - Password: "PWD:667166mm" (padded to 26 bytes)
+        - Username: "USER:<username>" (padded to 26 bytes)
+        - Password: "PWD:<password>" (padded to 26 bytes)
         - BusNumber: 1
         - BusLock: 0
 
@@ -559,15 +610,15 @@ class IPComClient:
         # Command ID and Version
         payload.extend([1, 2])
 
-        # Username: "USER:ppssecurity" padded to 26 bytes
-        username_str = f"USER:{self._username}"  # "USER:ppssecurity" = 16 chars
-        username_padding = " " * (26 - len(username_str))  # 10 spaces
+        # Username: "USER:<username>" padded to 26 bytes
+        username_str = f"USER:{self._username}"
+        username_padding = " " * (26 - len(username_str))
         username_field = (username_str + username_padding).encode('utf-8')
         payload.extend(username_field)
 
-        # Password: "PWD:667166mm" padded to 26 bytes
-        password_str = f"PWD:{self._password}"  # "PWD:667166mm" = 12 chars
-        password_padding = " " * (26 - len(password_str))  # 14 spaces
+        # Password: "PWD:<password>" padded to 26 bytes
+        password_str = f"PWD:{self._password}"
+        password_padding = " " * (26 - len(password_str))
         password_field = (password_str + password_padding).encode('utf-8')
         payload.extend(password_field)
 
@@ -719,7 +770,8 @@ class IPComClient:
         if not data:
             # Empty recv() means connection closed
             self.logger.warning(
-                "Connection closed by remote host %s:%s (recv returned empty)",
+                "CONN_CLOSED | connection closed by %s:%s | "
+                "recv() returned empty | server may have dropped connection or network issue",
                 self.host, self.port
             )
             self._cleanup_socket()
