@@ -1,4 +1,7 @@
-# IPCom Home Anywhere Blue - Home Assistant Integration (UnOfficial)
+# IPCom Home Anywhere Blue - Home Assistant Integration (Unofficial)
+
+[![hacs_badge](https://img.shields.io/badge/HACS-Custom-41BDF5.svg)](https://github.com/hacs/integration)
+[![GitHub Release](https://img.shields.io/github/release/J-Delsinne/AnB_Rimex-HomeAnyWhere-HA-Integration.svg)](https://github.com/J-Delsinne/AnB_Rimex-HomeAnyWhere-HA-Integration/releases)
 
 Control your Home Anywhere Blue home automation system from Home Assistant.
 
@@ -13,35 +16,37 @@ Control your Home Anywhere Blue home automation system from Home Assistant.
 
 ## Installation
 
-### Step 1: Copy Files to Home Assistant
+### Option 1: HACS (Recommended)
 
-Copy both folders to your Home Assistant config directory:
+1. Open HACS in Home Assistant
+2. Click the three dots in the top right corner
+3. Select **"Custom repositories"**
+4. Add this repository URL: `https://github.com/J-Delsinne/AnB_Rimex-HomeAnyWhere-HA-Integration`
+5. Select category: **"Integration"**
+6. Click **"Add"**
+7. Search for **"IPCom Home Anywhere Blue"** and install it
+8. Restart Home Assistant
+9. Configure your devices (see Step 2 below)
+
+### Option 2: Manual Installation
+
+Copy the `custom_components/ipcom` folder to your Home Assistant config directory:
 
 ```
 /config/
-├── ipcom/                         # CLI tool
-│   ├── ipcom_cli.py
-│   ├── ipcom_tcp_client.py
-│   ├── devices.yaml               # Your device configuration
-│   └── ...
-│
 └── custom_components/ipcom/       # Home Assistant integration
-    ├── __init__.py
-    ├── manifest.json
-    ├── light.py
-    ├── cover.py
+    ├── cli/                       # Bundled CLI (auto-installed)
     └── ...
 ```
 
 **Using SSH/SCP:**
 ```bash
-scp -r ipcom user@homeassistant:/config/
 scp -r custom_components/ipcom user@homeassistant:/config/custom_components/
 ```
 
 ### Step 2: Configure Your Devices
 
-Edit `/config/ipcom/devices.yaml` with your devices:
+Create `/config/ipcom/devices.yaml` with your devices:
 
 ```yaml
 lights:
@@ -78,7 +83,6 @@ shutters:
 2. Go to **Settings** > **Devices & Services** > **Add Integration**
 3. Search for **"IPCom Home Anywhere Blue"**
 4. Enter your connection details:
-   - **CLI Path**: `ipcom` (or `/config/ipcom`)
    - **Host**: Your IPCom server hostname or IP
    - **Port**: `5000` (default)
    - **Username**: Your IPCom username
@@ -107,35 +111,7 @@ logger:
 |-------|----------|
 | "Authentication failed" | Check username and password |
 | "Connection failed" | Check host and port, ensure IPCom server is reachable |
-| "CLI not found" | Check CLI path points to the `ipcom` folder |
 | Devices not appearing | Check `devices.yaml` configuration |
-
-### Test CLI Manually
-
-```bash
-# SSH into Home Assistant and test the CLI
-cd /config/ipcom
-python3 ipcom_cli.py status --host YOUR_HOST --port 5000 --username YOUR_USER --password YOUR_PASS
-```
-
----
-
-## CLI Commands (Optional)
-
-The CLI can also be used standalone for testing or scripting:
-
-```bash
-# Check status
-python3 ipcom_cli.py status --host HOST --port 5000 --username USER --password PASS
-
-# Control lights
-python3 ipcom_cli.py on kitchen --host HOST ...
-python3 ipcom_cli.py off kitchen --host HOST ...
-python3 ipcom_cli.py dim living_room 50 --host HOST ...
-
-# Watch live updates (JSON output)
-python3 ipcom_cli.py watch --json --host HOST ...
-```
 
 ---
 
@@ -202,4 +178,10 @@ The integration automatically combines paired relays into a single cover entity.
 
 ## Support
 
-For issues, open a ticket on GitHub.
+For issues, open a ticket on [GitHub Issues](https://github.com/J-Delsinne/AnB_Rimex-HomeAnyWhere-HA-Integration/issues).
+
+---
+
+## License
+
+This project is provided as-is for personal use. This is an unofficial integration and is not affiliated with or endorsed by And Solutions or the Home Anywhere Blue brand.

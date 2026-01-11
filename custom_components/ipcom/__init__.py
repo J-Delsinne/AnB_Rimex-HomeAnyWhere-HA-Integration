@@ -7,7 +7,6 @@ from homeassistant.config_entries import ConfigEntry
 from homeassistant.core import HomeAssistant
 
 from .const import (
-    CONF_CLI_PATH,
     CONF_HOST,
     CONF_PORT,
     CONF_USERNAME,
@@ -23,16 +22,14 @@ _LOGGER = logging.getLogger(__name__)
 async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
     """Set up IPCom from a config entry."""
     # Extract config
-    cli_path = entry.data[CONF_CLI_PATH]
     host = entry.data[CONF_HOST]
     port = entry.data[CONF_PORT]
     username = entry.data.get(CONF_USERNAME, "")
     password = entry.data.get(CONF_PASSWORD, "")
 
-    # Create coordinator
+    # Create coordinator (CLI path is auto-detected from bundled CLI)
     coordinator = IPComCoordinator(
         hass=hass,
-        cli_path=cli_path,
         host=host,
         port=port,
         username=username,

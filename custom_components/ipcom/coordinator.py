@@ -15,7 +15,7 @@ from typing import Any
 from homeassistant.core import HomeAssistant
 from homeassistant.helpers.update_coordinator import DataUpdateCoordinator
 
-from .const import DOMAIN, get_python_executable
+from .const import DOMAIN, get_cli_path, get_python_executable
 
 _LOGGER = logging.getLogger(__name__)
 
@@ -36,7 +36,6 @@ class IPComCoordinator(DataUpdateCoordinator[dict[str, Any]]):
     def __init__(
         self,
         hass: HomeAssistant,
-        cli_path: str,
         host: str,
         port: int,
         username: str,
@@ -46,7 +45,6 @@ class IPComCoordinator(DataUpdateCoordinator[dict[str, Any]]):
 
         Args:
             hass: Home Assistant instance
-            cli_path: Absolute path to CLI directory (containing ipcom_cli.py)
             host: IPCom host
             port: IPCom port
             username: IPCom authentication username
@@ -60,7 +58,8 @@ class IPComCoordinator(DataUpdateCoordinator[dict[str, Any]]):
             update_interval=None,  # NO POLLING - event-driven updates only
         )
 
-        self._cli_path = cli_path
+        # Use the bundled CLI path
+        self._cli_path = get_cli_path()
         self._host = host
         self._port = port
         self._username = username

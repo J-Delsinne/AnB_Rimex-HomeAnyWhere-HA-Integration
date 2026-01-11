@@ -4,12 +4,11 @@ This config flow allows users to set up the integration entirely via the UI,
 without editing configuration.yaml.
 
 Flow Steps:
-    1. User provides CLI path, host, port
-    2. Validation: Check CLI exists and can connect
+    1. User provides host, port, username, password
+    2. Validation: Check bundled CLI can connect to IPCom
     3. Create config entry with validated data
 
-IMPORTANT: This config flow does NOT implement protocol logic.
-It ONLY validates that the CLI works by calling it via subprocess.
+The CLI is bundled with the integration at custom_components/ipcom/cli/.
 """
 from __future__ import annotations
 
@@ -28,12 +27,11 @@ from homeassistant.data_entry_flow import FlowResult
 import homeassistant.helpers.config_validation as cv
 
 from .const import (
-    CONF_CLI_PATH,
     CONF_USERNAME,
     CONF_PASSWORD,
-    DEFAULT_HOST,
     DEFAULT_PORT,
     DOMAIN,
+    get_cli_path,
     get_python_executable,
 )
 
@@ -43,46 +41,8 @@ _LOGGER = logging.getLogger(__name__)
 STEP_USER = "user"
 
 
-def validate_cli_path(cli_path: str) -> str:
-    """Validate that CLI path exists and is accessible.
-
-    Args:
-        cli_path: Path to ipcom_cli.py directory (absolute or relative to /config)
-
-    Returns:
-        Absolute path to CLI directory if valid
-
-    Raises:
-        ValueError: If CLI path doesn't exist or isn't accessible
-    """
-    # Convert to absolute path if relative
-    if not os.path.isabs(cli_path):
-        # Relative paths are assumed to be relative to /config directory
-        config_dir = os.path.dirname(os.path.dirname(os.path.dirname(__file__)))  # Go up to /config
-        cli_path = os.path.join(config_dir, cli_path)
-        _LOGGER.debug("Converted relative path to: %s", cli_path)
-
-    # Normalize path
-    cli_path = os.path.normpath(cli_path)
-
-    # Check if directory exists
-    if not os.path.exists(cli_path):
-        raise ValueError(f"CLI directory not found at: {cli_path}")
-
-    # Check if ipcom_cli.py exists in directory
-    cli_script = os.path.join(cli_path, "ipcom_cli.py")
-    if not os.path.exists(cli_script):
-        raise ValueError(f"ipcom_cli.py not found in directory: {cli_path}")
-
-    # Check if file is readable
-    if not os.access(cli_script, os.R_OK):
-        raise ValueError(f"CLI script is not readable: {cli_script}")
-
-    return cli_path
-
-
 async def validate_cli_connection(
-    hass: HomeAssistant, cli_path: str, host: str, port: int,
+    hass: HomeAssistant, host: str, port: int,
     username: str, password: str
 ) -> dict[str, Any]:
     """Validate that CLI can connect to IPCom and return valid JSON.
@@ -92,7 +52,6 @@ async def validate_cli_connection(
 
     Args:
         hass: Home Assistant instance
-        cli_path: Absolute path to CLI directory
         host: IPCom host
         port: IPCom port
         username: IPCom username
@@ -106,6 +65,8 @@ async def validate_cli_connection(
     Raises:
         ValueError: If CLI fails, returns invalid JSON, or contract is wrong
     """
+    # Use the bundled CLI path
+    cli_path = get_cli_path()
     cli_script = os.path.join(cli_path, "ipcom_cli.py")
     python_exe = get_python_executable()
 
@@ -224,9 +185,8 @@ class IPComConfigFlow(config_entries.ConfigFlow, domain=DOMAIN):
     """Handle a config flow for IPCom integration.
 
     This config flow:
-    - Presents a form to the user for CLI path, host, port
-    - Validates the CLI path exists
-    - Validates the CLI can connect to IPCom
+    - Presents a form for host, port, username, password
+    - Validates the bundled CLI can connect to IPCom
     - Creates a config entry with the validated data
     """
 
@@ -244,13 +204,9 @@ class IPComConfigFlow(config_entries.ConfigFlow, domain=DOMAIN):
         if user_input is not None:
             # User submitted the form, validate input
             try:
-                # Validate CLI path
-                cli_path = validate_cli_path(user_input[CONF_CLI_PATH])
-
-                # Validate CLI connection
+                # Validate CLI connection using bundled CLI
                 validation_result = await validate_cli_connection(
                     self.hass,
-                    cli_path,
                     user_input[CONF_HOST],
                     user_input[CONF_PORT],
                     user_input[CONF_USERNAME],
@@ -272,7 +228,6 @@ class IPComConfigFlow(config_entries.ConfigFlow, domain=DOMAIN):
                 return self.async_create_entry(
                     title=title,
                     data={
-                        CONF_CLI_PATH: cli_path,  # Store absolute path
                         CONF_HOST: user_input[CONF_HOST],
                         CONF_PORT: user_input[CONF_PORT],
                         CONF_USERNAME: user_input[CONF_USERNAME],
@@ -284,18 +239,14 @@ class IPComConfigFlow(config_entries.ConfigFlow, domain=DOMAIN):
                 _LOGGER.error("Validation error: %s", err)
                 error_str = str(err).lower()
                 # Set generic error key, will be translated
-                if "not found" in error_str and "cli" in error_str:
-                    errors["base"] = "cli_not_found"
-                elif "not readable" in error_str:
-                    errors["base"] = "cli_not_readable"
-                elif "timed out" in error_str:
+                if "timed out" in error_str:
                     errors["base"] = "connection_timeout"
                 elif "invalid json" in error_str:
                     errors["base"] = "invalid_json"
                 elif "auth" in error_str or "credential" in error_str or "password" in error_str or "username" in error_str:
                     errors["base"] = "auth_failed"
                 elif "connection" in error_str and "failed" in error_str:
-                    errors["base"] = "connection_timeout"
+                    errors["base"] = "connection_failed"
                 elif "failed" in error_str:
                     errors["base"] = "cli_failed"
                 else:
@@ -308,10 +259,6 @@ class IPComConfigFlow(config_entries.ConfigFlow, domain=DOMAIN):
         # Show form (initial or after error)
         data_schema = vol.Schema(
             {
-                vol.Required(
-                    CONF_CLI_PATH,
-                    description={"suggested_value": "ipcom"},
-                ): cv.string,
                 vol.Required(
                     CONF_HOST,
                     description={"suggested_value": "your-ipcom-host.example.com"},
@@ -353,18 +300,10 @@ class IPComConfigFlow(config_entries.ConfigFlow, domain=DOMAIN):
         await self.async_set_unique_id(f"{import_data[CONF_HOST]}:{import_data[CONF_PORT]}")
         self._abort_if_unique_id_configured()
 
-        # Validate CLI path
-        try:
-            cli_path = validate_cli_path(import_data[CONF_CLI_PATH])
-        except ValueError as err:
-            _LOGGER.error("YAML import failed: %s", err)
-            return self.async_abort(reason="cli_not_found")
-
         # Validate CLI connection (optional, but recommended)
         try:
             validation_result = await validate_cli_connection(
                 self.hass,
-                cli_path,
                 import_data[CONF_HOST],
                 import_data[CONF_PORT],
                 import_data.get(CONF_USERNAME, ""),
@@ -386,7 +325,6 @@ class IPComConfigFlow(config_entries.ConfigFlow, domain=DOMAIN):
         return self.async_create_entry(
             title=title,
             data={
-                CONF_CLI_PATH: cli_path,
                 CONF_HOST: import_data[CONF_HOST],
                 CONF_PORT: import_data[CONF_PORT],
                 CONF_USERNAME: import_data.get(CONF_USERNAME, ""),

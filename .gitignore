@@ -32,8 +32,14 @@ stderr.txt
 outputmapping.txt
 nul
 ha_reverse/
-devices.yaml
 DEPLOYMENT_SUMMARY.md
+MODULE_6_QUICK_REFERENCE.md
+COVER_DEPLOYMENT.md
+CODEBASE_SANITATION_REPORT.md
+
+# User-specific device configuration (example file is tracked)
+# devices.yaml in the bundled CLI or user's config dir should not be committed
+custom_components/ipcom/cli/devices.yaml
 
 # Build artifacts
 build/
