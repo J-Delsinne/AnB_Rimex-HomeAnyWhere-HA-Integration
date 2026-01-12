@@ -15,7 +15,7 @@ from typing import Any
 from homeassistant.core import HomeAssistant
 from homeassistant.helpers.update_coordinator import DataUpdateCoordinator
 
-from .const import DOMAIN, get_cli_path, get_python_executable
+from .const import DOMAIN, get_cli_path, get_devices_yaml_path, get_python_executable
 
 _LOGGER = logging.getLogger(__name__)
 
@@ -58,8 +58,9 @@ class IPComCoordinator(DataUpdateCoordinator[dict[str, Any]]):
             update_interval=None,  # NO POLLING - event-driven updates only
         )
 
-        # Use the bundled CLI path
+        # Use the bundled CLI path and devices.yaml from HA config dir
         self._cli_path = get_cli_path()
+        self._devices_file = get_devices_yaml_path(hass.config.path())
         self._host = host
         self._port = port
         self._username = username
@@ -138,6 +139,8 @@ class IPComCoordinator(DataUpdateCoordinator[dict[str, Any]]):
                 self._username,
                 "--password",
                 self._password,
+                "--devices-file",
+                self._devices_file,
             ]
 
             _LOGGER.debug("Starting CLI subprocess with Python: %s", python_exe)
@@ -200,6 +203,8 @@ class IPComCoordinator(DataUpdateCoordinator[dict[str, Any]]):
                 self._username,
                 "--password",
                 self._password,
+                "--devices-file",
+                self._devices_file,
             ]
 
             _LOGGER.debug("Fetching initial state: %s ... (credentials hidden)", " ".join(cmd[:5]))
@@ -637,6 +642,8 @@ class IPComCoordinator(DataUpdateCoordinator[dict[str, Any]]):
                     self._username,
                     "--password",
                     self._password,
+                    "--devices-file",
+                    self._devices_file,
                 ])
 
                 _LOGGER.debug("Executing command: %s %s %s ...", cmd[0], cmd[1], cmd[2])

@@ -27,14 +27,27 @@ Control your Home Anywhere Blue home automation system from Home Assistant.
 
 ### Step 2: Configure Your Devices
 
-After installation, you'll find a template file at:
-```
-/config/custom_components/ipcom/cli/devices.example.yaml
+Create the device configuration file at `/config/ipcom/devices.yaml`:
+
+**Option A: Using File Editor Add-on (recommended)**
+1. Install the **File Editor** add-on from the Add-on Store if you haven't already
+2. Open File Editor and navigate to the `/config/` folder
+3. Create a new folder called `ipcom`
+4. Open `/config/custom_components/ipcom/cli/devices.example.yaml` and copy its contents
+5. Create a new file `/config/ipcom/devices.yaml` and paste the contents
+6. Edit with your device configuration
+
+**Option B: Using SSH**
+```bash
+mkdir -p /config/ipcom
+cp /config/custom_components/ipcom/cli/devices.example.yaml /config/ipcom/devices.yaml
 ```
 
-1. **Rename** this file to `devices.yaml`
-2. **Edit** `devices.yaml` with your actual device configuration.
-#find the mapping info in the official desktop home anywhere application (IPCOM/Installer Creds needed)
+Edit `/config/ipcom/devices.yaml` with your actual device configuration.
+
+> **Note:** The `devices.yaml` file is stored in `/config/ipcom/` (outside the integration folder) so it won't be overwritten when you update the integration via HACS.
+>
+> Find the mapping info in the official desktop Home Anywhere application (IPCOM/Installer credentials needed).
 
 Example configuration:
 
@@ -155,7 +168,7 @@ logger:
 |-------|----------|
 | "Authentication failed" | Check username and password |
 | "Connection failed" | Check host and port, ensure IPCom server is reachable |
-| Devices not appearing | Verify `devices.yaml` exists (not `devices.example.yaml`) and is correctly configured |
+| Devices not appearing | Verify `/config/ipcom/devices.yaml` exists and is correctly configured |
 
 ---
 
@@ -181,7 +194,7 @@ logger:
 
 ## Version
 
-**v3.1.0 Beta**
+**v3.2.0 Beta**
 
 ---
 

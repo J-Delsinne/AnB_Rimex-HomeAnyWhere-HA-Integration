@@ -894,6 +894,7 @@ Device names are defined in devices.yaml
     parser.add_argument('--password', required=True, help='IPCom authentication password')
     parser.add_argument('--json', action='store_true', help='Output in JSON format (for status/watch)')
     parser.add_argument('--debug', action='store_true', help='Enable debug output')
+    parser.add_argument('--devices-file', default='devices.yaml', help='Path to devices.yaml configuration file')
 
     args = parser.parse_args()
 
@@ -921,7 +922,7 @@ Device names are defined in devices.yaml
         parser.error("--json flag only valid with 'status' or 'watch' commands")
 
     # Load device mapper
-    mapper = DeviceMapper()
+    mapper = DeviceMapper(config_file=args.devices_file)
 
     # Connect to IPCom
     # Suppress connection messages in JSON mode

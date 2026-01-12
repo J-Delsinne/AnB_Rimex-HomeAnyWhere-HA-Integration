@@ -32,6 +32,7 @@ from .const import (
     DEFAULT_PORT,
     DOMAIN,
     get_cli_path,
+    get_devices_yaml_path,
     get_python_executable,
 )
 
@@ -65,10 +66,11 @@ async def validate_cli_connection(
     Raises:
         ValueError: If CLI fails, returns invalid JSON, or contract is wrong
     """
-    # Use the bundled CLI path
+    # Use the bundled CLI path and devices.yaml from HA config dir
     cli_path = get_cli_path()
     cli_script = os.path.join(cli_path, "ipcom_cli.py")
     python_exe = get_python_executable()
+    devices_file = get_devices_yaml_path(hass.config.path())
 
     cmd = [
         python_exe,
@@ -83,6 +85,8 @@ async def validate_cli_connection(
         username,
         "--password",
         password,
+        "--devices-file",
+        devices_file,
     ]
 
     _LOGGER.debug("Validating CLI connection using Python: %s", python_exe)
