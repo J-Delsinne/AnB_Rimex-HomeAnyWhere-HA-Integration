@@ -194,7 +194,7 @@ logger:
 
 ## Version
 
-**v3.2.0 Beta**
+**v3.1.2 Beta**
 
 ---
 
