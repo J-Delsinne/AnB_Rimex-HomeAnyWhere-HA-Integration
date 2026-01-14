@@ -89,20 +89,9 @@ class IPComCoordinator(DataUpdateCoordinator[dict[str, Any]]):
         # Store devices config from config entry (if using auto-discovery)
         self._devices_config = devices_config
 
-        # Determine devices file path:
-        # - If devices_config exists (auto-discovery), generate a devices.yaml file
-        # - Otherwise, use the default devices.yaml location (manual config)
-        if devices_config:
-            self._devices_file = self._generate_devices_file(devices_config)
-            _LOGGER.info(
-                "Using auto-discovered devices config (%d lights, %d shutters) -> %s",
-                len(devices_config.get("lights", {})),
-                len(devices_config.get("shutters", {})),
-                self._devices_file
-            )
-        else:
-            self._devices_file = get_devices_yaml_path(hass.config.path())
-            _LOGGER.info("Using manual devices file: %s", self._devices_file)
+        # Devices file path will be set in async_start() to avoid blocking I/O in __init__
+        # For now, set the default path (will be overwritten if using auto-discovery)
+        self._devices_file = get_devices_yaml_path(hass.config.path())
 
         # Connection fallback configuration
         self._connection_type = connection_type or CONNECTION_TYPE_LOCAL
@@ -202,6 +191,22 @@ class IPComCoordinator(DataUpdateCoordinator[dict[str, Any]]):
         This is called during integration setup (async_setup_entry).
         """
         self._stats["start_time"] = time.time()
+
+        # Generate devices.yaml from auto-discovered config if available
+        # This is done here (not in __init__) to use async file I/O
+        if self._devices_config:
+            self._devices_file = await self.hass.async_add_executor_job(
+                self._generate_devices_file, self._devices_config
+            )
+            _LOGGER.info(
+                "Using auto-discovered devices config (%d lights, %d shutters) -> %s",
+                len(self._devices_config.get("lights", {})),
+                len(self._devices_config.get("shutters", {})),
+                self._devices_file
+            )
+        else:
+            _LOGGER.info("Using manual devices file: %s", self._devices_file)
+
         _LOGGER.info(
             "Starting IPCom coordinator - connecting to %s:%s",
             self._host, self._port

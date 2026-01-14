@@ -64,8 +64,9 @@ class DeviceMapper:
         config_path = Path(self.config_file)
 
         if not config_path.exists():
-            print(f"Warning: {self.config_file} not found. No device names available.")
-            print(f"Create {self.config_file} to define device names.")
+            # Output to stderr to avoid breaking JSON mode
+            print(f"Warning: {self.config_file} not found. No device names available.", file=sys.stderr)
+            print(f"Create {self.config_file} to define device names.", file=sys.stderr)
             return
 
         try:
@@ -142,7 +143,11 @@ class DeviceMapper:
                 self.device_categories[current_device] = current_category
 
     def _validate_mapping(self):
-        """Validate mapping for conflicts and errors."""
+        """Validate mapping for conflicts and errors.
+
+        Note: All warnings go to stderr to avoid breaking JSON output mode.
+        Duplicate display names for shutters are expected (up/down relay pairs).
+        """
         seen_addresses = {}
         seen_display_names = {}
 
@@ -151,26 +156,27 @@ class DeviceMapper:
             output = config.get('output')
 
             if module is None or output is None:
-                print(f"⚠️ Warning: Device '{device_key}' missing module or output")
+                print(f"Warning: Device '{device_key}' missing module or output", file=sys.stderr)
                 continue
 
             # Check for duplicate module/output combinations
             address = (module, output)
             if address in seen_addresses:
-                print(f"❌ ERROR: Duplicate module/output mapping detected!")
-                print(f"   Module {module}, Output {output} is assigned to both:")
-                print(f"   - {seen_addresses[address]}")
-                print(f"   - {device_key}")
+                print(f"ERROR: Duplicate module/output mapping detected!", file=sys.stderr)
+                print(f"   Module {module}, Output {output} is assigned to both:", file=sys.stderr)
+                print(f"   - {seen_addresses[address]}", file=sys.stderr)
+                print(f"   - {device_key}", file=sys.stderr)
                 sys.exit(1)
 
             seen_addresses[address] = device_key
 
-            # Check for duplicate display names
+            # Check for duplicate display names (skip for shutters - pairs share names)
             display_name = config.get('display_name', device_key.upper())
-            if display_name in seen_display_names:
-                print(f"⚠️ Warning: Duplicate display name '{display_name}' for:")
-                print(f"   - {seen_display_names[display_name]}")
-                print(f"   - {device_key}")
+            category = self.device_categories.get(device_key, '')
+            if display_name in seen_display_names and category != 'shutters':
+                print(f"Warning: Duplicate display name '{display_name}' for:", file=sys.stderr)
+                print(f"   - {seen_display_names[display_name]}", file=sys.stderr)
+                print(f"   - {device_key}", file=sys.stderr)
 
             seen_display_names[display_name] = device_key
 
