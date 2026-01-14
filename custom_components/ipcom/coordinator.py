@@ -153,7 +153,7 @@ class IPComCoordinator(DataUpdateCoordinator[dict[str, Any]]):
         This file contains the device mappings discovered from HomeAnywhere cloud.
 
         Args:
-            devices_config: Dictionary with 'lights' and 'shutters' keys
+            devices_config: Dictionary with 'lights', 'switches', and 'shutters' keys
 
         Returns:
             Path to the generated devices file
@@ -167,6 +167,7 @@ class IPComCoordinator(DataUpdateCoordinator[dict[str, Any]]):
         # Build YAML content matching the expected format
         yaml_content = {
             "lights": devices_config.get("lights", {}),
+            "switches": devices_config.get("switches", {}),
             "shutters": devices_config.get("shutters", {}),
         }
 
@@ -178,8 +179,9 @@ class IPComCoordinator(DataUpdateCoordinator[dict[str, Any]]):
             yaml.dump(yaml_content, f, default_flow_style=False, allow_unicode=True)
 
         _LOGGER.debug(
-            "Generated devices.yaml with %d lights and %d shutters",
+            "Generated devices.yaml with %d lights, %d switches, and %d shutters",
             len(devices_config.get("lights", {})),
+            len(devices_config.get("switches", {})),
             len(devices_config.get("shutters", {}))
         )
 
@@ -199,8 +201,9 @@ class IPComCoordinator(DataUpdateCoordinator[dict[str, Any]]):
                 self._generate_devices_file, self._devices_config
             )
             _LOGGER.info(
-                "Using auto-discovered devices config (%d lights, %d shutters) -> %s",
+                "Using auto-discovered devices config (%d lights, %d switches, %d shutters) -> %s",
                 len(self._devices_config.get("lights", {})),
+                len(self._devices_config.get("switches", {})),
                 len(self._devices_config.get("shutters", {})),
                 self._devices_file
             )

@@ -3,6 +3,9 @@ Devices.yaml generator from HomeAnywhere site configuration.
 
 This module converts HomeAnywhere site data into a devices.yaml file
 compatible with the IPCom Home Assistant integration.
+
+Uses GraphicType from Home Anywhere Blue application to automatically
+map devices to the correct Home Assistant platform (light, switch, cover).
 """
 
 import re
@@ -15,6 +18,31 @@ try:
 except ImportError:
     from .homeanywhere_api import FlashSite, FlashIPCom, FlashOutputModule, FlashMapElement
 
+# Import GraphicType mapping from const
+try:
+    from const import GRAPHIC_TYPE_MAPPING, DEFAULT_GRAPHIC_TYPE_MAPPING
+except ImportError:
+    try:
+        from ..const import GRAPHIC_TYPE_MAPPING, DEFAULT_GRAPHIC_TYPE_MAPPING
+    except ImportError:
+        # Fallback definitions for standalone execution
+        GRAPHIC_TYPE_MAPPING = {
+            "OutputLightBulb": {"platform": "light", "device_class": None, "icon": None},
+            "OutputLightBulbEconomic": {"platform": "light", "device_class": None, "icon": "mdi:lightbulb-fluorescent-tube"},
+            "OutputSocket": {"platform": "switch", "device_class": "outlet", "icon": None},
+            "OutputTelevision": {"platform": "switch", "device_class": None, "icon": "mdi:television"},
+            "OutputWashMachine": {"platform": "switch", "device_class": None, "icon": "mdi:washing-machine"},
+            "OutputDishWasher": {"platform": "switch", "device_class": None, "icon": "mdi:dishwasher"},
+            "OutputCoffeeMachine": {"platform": "switch", "device_class": None, "icon": "mdi:coffee-maker"},
+            "OutputHeater": {"platform": "switch", "device_class": None, "icon": "mdi:radiator"},
+            "OutputBoiler": {"platform": "switch", "device_class": None, "icon": "mdi:water-boiler"},
+            "OutputShutterUp": {"platform": "cover", "device_class": "shutter", "relay_role": "up"},
+            "OutputShutterDown": {"platform": "cover", "device_class": "shutter", "relay_role": "down"},
+            "OutputBlindUp": {"platform": "cover", "device_class": "blind", "relay_role": "up"},
+            "OutputBlindDown": {"platform": "cover", "device_class": "blind", "relay_role": "down"},
+        }
+        DEFAULT_GRAPHIC_TYPE_MAPPING = {"platform": "light", "device_class": None, "icon": None}
+
 
 @dataclass
 class DeviceEntry:
@@ -25,6 +53,10 @@ class DeviceEntry:
     type: str  # light, dimmer, switch
     display_name: str
     description: str
+    # Additional fields from GraphicType mapping
+    graphic_type: Optional[str] = None
+    device_class: Optional[str] = None
+    icon: Optional[str] = None
     # Shutter-specific fields
     relay_role: Optional[str] = None  # up, down
     paired_device: Optional[str] = None
@@ -228,19 +260,23 @@ def generate_devices_config(site: FlashSite, ipcom: FlashIPCom) -> dict:
     This is the preferred method for Home Assistant integration as it stores
     the configuration in HA's config entry system, which survives HACS updates.
 
+    Uses GraphicType from Home Anywhere Blue to automatically categorize devices
+    into the correct Home Assistant platforms (light, switch, cover).
+
     Args:
         site: FlashSite with full configuration
         ipcom: FlashIPCom to generate config for
 
     Returns:
-        Dictionary with 'lights' and 'shutters' keys containing device configs
+        Dictionary with 'lights', 'switches', and 'shutters' keys containing device configs
     """
     config = {
         "lights": {},
+        "switches": {},
         "shutters": {},
     }
 
-    # Build lookup of map elements for widget type info
+    # Build lookup of map elements for GraphicType and WidgetType info
     map_lookup: dict[tuple[int, int], FlashMapElement] = {}
     for elem in site.map_elements:
         parsed = elem.parse_config()
@@ -248,7 +284,7 @@ def generate_devices_config(site: FlashSite, ipcom: FlashIPCom) -> dict:
             _, module, output = parsed
             map_lookup[(module, output)] = elem
 
-    # Collect lights (Exo8 and ExoDim modules)
+    # Process Exo8 and ExoDim modules (lights and switches)
     for module in ipcom.modules:
         if module.type not in ("Exo8", "ExoDim"):
             continue
@@ -260,24 +296,54 @@ def generate_devices_config(site: FlashSite, ipcom: FlashIPCom) -> dict:
             output_num = output_idx + 1
             map_elem = map_lookup.get((module.number, output_num))
 
-            # Determine type based on module type and widget type
-            if module.type == "ExoDim":
+            # Get GraphicType from map element, default to OutputLightBulb
+            graphic_type = map_elem.graphic_type if map_elem else "OutputLightBulb"
+            
+            # Get platform mapping based on GraphicType
+            mapping = GRAPHIC_TYPE_MAPPING.get(graphic_type, DEFAULT_GRAPHIC_TYPE_MAPPING)
+            platform = mapping.get("platform", "light")
+
+            # Determine if dimmable (ExoDim module or Dimmable widget type)
+            is_dimmable = (
+                module.type == "ExoDim" or 
+                (map_elem and map_elem.widget_type == "Dimmable")
+            )
+
+            # Set device type based on platform and dimmability
+            if platform == "light" and is_dimmable:
                 device_type = "dimmer"
-            elif map_elem and map_elem.widget_type == "Dimmable":
-                device_type = "dimmer"
-            else:
+            elif platform == "light":
                 device_type = "light"
+            else:
+                device_type = platform  # switch, cover, etc.
 
             key = sanitize_key(output_name)
-            config["lights"][key] = {
+            
+            device_entry = {
                 "module": module.number,
                 "output": output_num,
                 "type": device_type,
                 "display_name": output_name,
                 "description": f"Module {module.number} ({module.type}) - Output {output_num}",
+                "graphic_type": graphic_type,
             }
+            
+            # Add device_class if specified
+            if mapping.get("device_class"):
+                device_entry["device_class"] = mapping["device_class"]
+            
+            # Add icon if specified
+            if mapping.get("icon"):
+                device_entry["icon"] = mapping["icon"]
 
-    # Detect and add shutter pairs
+            # Add to appropriate platform bucket
+            if platform == "light":
+                config["lights"][key] = device_entry
+            elif platform == "switch":
+                config["switches"][key] = device_entry
+            # Note: covers from Exo8/ExoDim are rare, usually from ExoStore
+
+    # Detect and add shutter pairs from ExoStore modules
     shutter_pairs = detect_shutter_pairs(ipcom.modules)
 
     for pair in shutter_pairs:

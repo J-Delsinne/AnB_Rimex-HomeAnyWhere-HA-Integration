@@ -36,7 +36,147 @@ DEFAULT_HOST = ""  # No default - user must provide their host
 DEFAULT_PORT = 5000
 
 # Entity platforms
-PLATFORMS = ["light", "cover"]
+PLATFORMS = ["light", "cover", "switch"]
+
+# ============================================================================
+# GraphicType to Home Assistant Platform Mapping
+# ============================================================================
+# These GraphicTypes are extracted from the Home Anywhere Blue application
+# (Home_Anywhere_D.dll) and define how devices appear in the app.
+# We use this to map devices to the correct Home Assistant platform.
+# ============================================================================
+
+GRAPHIC_TYPE_MAPPING = {
+    # Lights - map to light platform
+    "OutputLightBulb": {
+        "platform": "light",
+        "device_class": None,
+        "icon": None,
+    },
+    "OutputLightBulbEconomic": {
+        "platform": "light",
+        "device_class": None,
+        "icon": "mdi:lightbulb-fluorescent-tube",
+    },
+    "OutputButtonLedYellow": {
+        "platform": "light",
+        "device_class": None,
+        "icon": "mdi:led-on",
+    },
+    
+    # Switches - Outlets/Sockets
+    "OutputSocket": {
+        "platform": "switch",
+        "device_class": "outlet",
+        "icon": None,
+    },
+    
+    # Switches - Appliances
+    "OutputTelevision": {
+        "platform": "switch",
+        "device_class": None,
+        "icon": "mdi:television",
+    },
+    "OutputWashMachine": {
+        "platform": "switch",
+        "device_class": None,
+        "icon": "mdi:washing-machine",
+    },
+    "OutputDishWasher": {
+        "platform": "switch",
+        "device_class": None,
+        "icon": "mdi:dishwasher",
+    },
+    "OutputCoffeeMachine": {
+        "platform": "switch",
+        "device_class": None,
+        "icon": "mdi:coffee-maker",
+    },
+    "OutputMicrowaveOven": {
+        "platform": "switch",
+        "device_class": None,
+        "icon": "mdi:microwave",
+    },
+    "OutputOven": {
+        "platform": "switch",
+        "device_class": None,
+        "icon": "mdi:stove",
+    },
+    
+    # Switches - HVAC
+    "OutputHeater": {
+        "platform": "switch",
+        "device_class": None,
+        "icon": "mdi:radiator",
+    },
+    "OutputElectricHeater": {
+        "platform": "switch",
+        "device_class": None,
+        "icon": "mdi:radiator",
+    },
+    "OutputBoiler": {
+        "platform": "switch",
+        "device_class": None,
+        "icon": "mdi:water-boiler",
+    },
+    "OutputAirConditionner": {
+        "platform": "switch",
+        "device_class": None,
+        "icon": "mdi:air-conditioner",
+    },
+    
+    # Doors (as switches for now)
+    "OutputDoorOpen": {
+        "platform": "switch",
+        "device_class": None,
+        "icon": "mdi:door-open",
+    },
+    "OutputDoorClose": {
+        "platform": "switch",
+        "device_class": None,
+        "icon": "mdi:door-closed",
+    },
+    "OutputLock": {
+        "platform": "switch",
+        "device_class": None,
+        "icon": "mdi:lock",
+    },
+    
+    # Covers - Shutters (detected via ExoStore module, but GraphicType confirms)
+    "OutputShutterUp": {
+        "platform": "cover",
+        "device_class": "shutter",
+        "icon": None,
+        "relay_role": "up",
+    },
+    "OutputShutterDown": {
+        "platform": "cover",
+        "device_class": "shutter",
+        "icon": None,
+        "relay_role": "down",
+    },
+    
+    # Covers - Blinds
+    "OutputBlindUp": {
+        "platform": "cover",
+        "device_class": "blind",
+        "icon": None,
+        "relay_role": "up",
+    },
+    "OutputBlindDown": {
+        "platform": "cover",
+        "device_class": "blind",
+        "icon": None,
+        "relay_role": "down",
+    },
+}
+
+# Default mapping for unknown GraphicTypes - treat as light
+DEFAULT_GRAPHIC_TYPE_MAPPING = {
+    "platform": "light",
+    "device_class": None,
+    "icon": None,
+}
 
 
 def get_cli_path() -> str:

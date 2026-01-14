@@ -80,6 +80,12 @@ class IPComLight(CoordinatorEntity[IPComCoordinator], LightEntity):
         # Store device metadata for device_info
         self._module = device_data.get("module")
         self._output = device_data.get("output")
+        self._graphic_type = device_data.get("graphic_type", "OutputLightBulb")
+
+        # Set custom icon if specified in GraphicType mapping
+        custom_icon = device_data.get("icon")
+        if custom_icon:
+            self._attr_icon = custom_icon
 
     @property
     def device_info(self) -> dict[str, Any]:
