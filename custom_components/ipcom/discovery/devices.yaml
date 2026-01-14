@@ -1,0 +1,261 @@
+# =====================================================
+# Home Anywhere Blue - Device Configuration
+# Site: Tondeur
+# IPCom: IPCom Marie-Henriette (192.168.1.250:6354)
+# Generated automatically from HomeAnywhere cloud
+# =====================================================
+
+# Connection info (for reference, configure in Home Assistant):
+#   Local:  192.168.1.250:6354
+#   Remote: tondeur.dvrname.net:6354
+#   Bus:    BiBus
+
+# =====================================================
+# LIGHTS
+# =====================================================
+
+lights:
+  pc_cdee_bibliotheque:
+    module: 1
+    output: 1
+    type: light
+    display_name: "PC Cdee Bibliotheque"
+    description: "Module 1 (Exo8) - Output 1"
+
+  pc_cdee_salon:
+    module: 1
+    output: 2
+    type: light
+    display_name: "PC Cdee Salon"
+    description: "Module 1 (Exo8) - Output 2"
+
+  pc_cdee_chambre_appoint:
+    module: 1
+    output: 3
+    type: light
+    display_name: "PC Cdee Chambre appoint"
+    description: "Module 1 (Exo8) - Output 3"
+
+  pc_cdee_alcoves:
+    module: 1
+    output: 4
+    type: light
+    display_name: "PC Cdee Alcoves"
+    description: "Module 1 (Exo8) - Output 4"
+
+  pc_cdee_chambre_1:
+    module: 1
+    output: 5
+    type: light
+    display_name: "PC Cdee Chambre 1"
+    description: "Module 1 (Exo8) - Output 5"
+
+  pc_cdee_ext_rez_de_chaussee:
+    module: 1
+    output: 6
+    type: light
+    display_name: "PC Cdee Ext. rez-de-chaussee"
+    description: "Module 1 (Exo8) - Output 6"
+
+  pc_cdee_ext_jardin:
+    module: 1
+    output: 7
+    type: light
+    display_name: "PC Cdee Ext. Jardin"
+    description: "Module 1 (Exo8) - Output 7"
+
+  centre_salle_a_manger:
+    module: 2
+    output: 3
+    type: light
+    display_name: "Centre salle a manger"
+    description: "Module 2 (Exo8) - Output 3"
+
+  spot_cuisine:
+    module: 2
+    output: 4
+    type: light
+    display_name: "Spot cuisine"
+    description: "Module 2 (Exo8) - Output 4"
+
+  spot_ilot_central_cuisine:
+    module: 2
+    output: 5
+    type: light
+    display_name: "Spot ilot central cuisine"
+    description: "Module 2 (Exo8) - Output 5"
+
+  sous_meuble_cuisine:
+    module: 2
+    output: 6
+    type: light
+    display_name: "Sous meuble cuisine"
+    description: "Module 2 (Exo8) - Output 6"
+
+  sas_bureau_rez_de_chaussee:
+    module: 2
+    output: 8
+    type: light
+    display_name: "Sas bureau rez-de-chaussee"
+    description: "Module 2 (Exo8) - Output 8"
+
+  centre_chambre_appoint:
+    module: 3
+    output: 1
+    type: light
+    display_name: "Centre chambre appoint"
+    description: "Module 3 (Exo8) - Output 1"
+
+  appliques_hall_nuit_sous_sol:
+    module: 3
+    output: 2
+    type: light
+    display_name: "Appliques hall nuit sous-sol"
+    description: "Module 3 (Exo8) - Output 2"
+
+  wc_sous_sol:
+    module: 3
+    output: 3
+    type: light
+    display_name: "Wc sous-sol"
+    description: "Module 3 (Exo8) - Output 3"
+
+  buanderie:
+    module: 3
+    output: 5
+    type: light
+    display_name: "Buanderie"
+    description: "Module 3 (Exo8) - Output 5"
+
+  wc_chambre_1:
+    module: 3
+    output: 6
+    type: light
+    display_name: "Wc chambre 1"
+    description: "Module 3 (Exo8) - Output 6"
+
+  exterieur_sous_sol:
+    module: 3
+    output: 7
+    type: light
+    display_name: "Exterieur sous-sol"
+    description: "Module 3 (Exo8) - Output 7"
+
+  local_velos:
+    module: 3
+    output: 8
+    type: light
+    display_name: "Local velos"
+    description: "Module 3 (Exo8) - Output 8"
+
+  applique_centre_hall_d_entre:
+    module: 4
+    output: 1
+    type: light
+    display_name: "Applique + centre hall d'entre"
+    description: "Module 4 (Exo8) - Output 1"
+
+  dessus_escalier:
+    module: 4
+    output: 2
+    type: light
+    display_name: "Dessus escalier"
+    description: "Module 4 (Exo8) - Output 2"
+
+  wc_entre_sol:
+    module: 4
+    output: 3
+    type: light
+    display_name: "Wc entre-sol"
+    description: "Module 4 (Exo8) - Output 3"
+
+  bureau_entre_sol:
+    module: 4
+    output: 4
+    type: light
+    display_name: "Bureau entre-sol"
+    description: "Module 4 (Exo8) - Output 4"
+
+  escalier_et_sas_entre_sol:
+    module: 4
+    output: 5
+    type: light
+    display_name: "Escalier et sas entre-sol"
+    description: "Module 4 (Exo8) - Output 5"
+
+  wc_rez_de_chaussee:
+    module: 4
+    output: 6
+    type: light
+    display_name: "Wc rez-de-chaussee"
+    description: "Module 4 (Exo8) - Output 6"
+
+  bureau_rez_de_chaussee:
+    module: 4
+    output: 7
+    type: light
+    display_name: "Bureau rez-de-chaussee"
+    description: "Module 4 (Exo8) - Output 7"
+
+  cagibi_bureau_rez_de_chaussee:
+    module: 4
+    output: 8
+    type: light
+    display_name: "Cagibi bureau rez-de-chaussee"
+    description: "Module 4 (Exo8) - Output 8"
+
+  salle_de_bain_chambre1:
+    module: 5
+    output: 1
+    type: light
+    display_name: "Salle de bain chambre1"
+    description: "Module 5 (Exo8) - Output 1"
+
+  douche_chambre_appoint:
+    module: 5
+    output: 2
+    type: light
+    display_name: "Douche chambre appoint"
+    description: "Module 5 (Exo8) - Output 2"
+
+  local_compteurs:
+    module: 5
+    output: 3
+    type: light
+    display_name: "Local compteurs"
+    description: "Module 5 (Exo8) - Output 3"
+
+  led_alcoves:
+    module: 5
+    output: 4
+    type: light
+    display_name: "Led alcoves"
+    description: "Module 5 (Exo8) - Output 4"
+
+  applique_ext_rez_de_chaussee:
+    module: 5
+    output: 5
+    type: light
+    display_name: "Applique Ext. rez-de-chaussee"
+    description: "Module 5 (Exo8) - Output 5"
+
+  centre_bibliotheque:
+    module: 6
+    output: 1
+    type: dimmer
+    display_name: "Centre bibliotheque"
+    description: "Module 6 (ExoDim) - Output 1"
+
+  centre_salon:
+    module: 6
+    output: 2
+    type: dimmer
+    display_name: "Centre salon"
+    description: "Module 6 (ExoDim) - Output 2"
+
+  centre_applique_chambres:
+    module: 6
+    output: 3
+    type: dimmer
+    display_name: "Centre + applique chambres"
+    description: "Module 6 (ExoDim) - Output 3"
